@@ -1,6 +1,5 @@
 #![allow(non_snake_case)]
 
-use core::mem;
 use curve25519_dalek::ristretto::{CompressedRistretto, RistrettoPoint};
 use curve25519_dalek::scalar::Scalar;
 use curve25519_dalek::traits::VartimeMultiscalarMul;
@@ -42,6 +41,7 @@ pub struct Verifier<'t> {
     /// when non-randomized variables are committed.
     /// After that, the option will flip to None and additional calls to `randomize_constraints`
     /// will invoke closures immediately.
+    #[allow(clippy::type_complexity)]
     deferred_constraints: Vec<Box<dyn Fn(&mut RandomizingVerifier<'t>) -> Result<(), R1CSError>>>,
 
     /// Index of a pending multiplier that's not fully assigned yet.
@@ -303,7 +303,7 @@ impl<'t> Verifier<'t> {
         // Clear the pending multiplier (if any) because it was committed into A_L/A_R/S.
         self.pending_multiplier = None;
 
-        if self.deferred_constraints.len() == 0 {
+        if self.deferred_constraints.is_empty() {
             self.transcript.r1cs_1phase_domain_sep();
             Ok(self)
         } else {
@@ -311,7 +311,7 @@ impl<'t> Verifier<'t> {
             // Note: the wrapper could've used &mut instead of ownership,
             // but specifying lifetimes for boxed closures is not going to be nice,
             // so we move the self into wrapper and then move it back out afterwards.
-            let mut callbacks = mem::replace(&mut self.deferred_constraints, Vec::new());
+            let mut callbacks = std::mem::take(&mut self.deferred_constraints);
             let mut wrapped_self = RandomizingVerifier { verifier: self };
             for callback in callbacks.drain(..) {
                 callback(&mut wrapped_self)?;
@@ -488,7 +488,7 @@ impl<'t> Verifier<'t> {
                 .chain(proof.ipp_proof.L_vec.iter().map(|L_i| L_i.decompress()))
                 .chain(proof.ipp_proof.R_vec.iter().map(|R_i| R_i.decompress())),
         )
-        .ok_or_else(|| R1CSError::VerificationError)?;
+        .ok_or(R1CSError::VerificationError)?;
 
         use curve25519_dalek::traits::IsIdentity;
 

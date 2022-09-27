@@ -19,6 +19,7 @@ edition = "2021"
 
 [dependencies]
 curve25519-dalek = { version = "2", default-features = false, features = ["u64_backend", "nightly", "serde", "alloc"] }
+mpc-ristretto = { git = "https://github.com/renegade-fi/MPC-Ristretto" }
 subtle = { version = "2", default-features = false }
 sha3 = { version = "0.8", default-features = false }
 digest = { version = "0.8", default-features = false }
@@ -38,10 +39,11 @@ bincode = "1"
 rand_chacha = "0.2"
 
 [features]
-default = ["std", "avx2_backend"]
+default = ["std", "avx2_backend", "multiprover"]
 avx2_backend = ["curve25519-dalek/avx2_backend"]
 # yoloproofs = []
 std = ["rand", "rand/std", "thiserror"]
+multiprover = []
 
 [[test]]
 name = "range_proof"

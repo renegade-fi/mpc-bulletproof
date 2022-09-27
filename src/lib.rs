@@ -42,6 +42,10 @@ pub mod range_proof_mpc {
     pub use crate::range_proof::party;
 }
 
-#[cfg(feature = "yoloproofs")]
 #[cfg(feature = "std")]
+#[cfg(feature = "multiprover")]
 pub mod r1cs;
+
+#[cfg(feature = "multiprover")]
+#[allow(missing_docs)]
+pub mod r1cs_mpc;

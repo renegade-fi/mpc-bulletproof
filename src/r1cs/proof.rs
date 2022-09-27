@@ -127,7 +127,7 @@ impl R1CSProof {
     ///
     /// Returns an error if the byte slice cannot be parsed into a `R1CSProof`.
     pub fn from_bytes(slice: &[u8]) -> Result<R1CSProof, R1CSError> {
-        if slice.len() < 1 {
+        if slice.is_empty() {
             return Err(R1CSError::FormatError);
         }
         let version = slice[0];

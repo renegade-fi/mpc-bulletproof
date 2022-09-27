@@ -122,7 +122,7 @@ pub enum MPCError {
 /// Represents an error during the proving or verifying of a constraint system.
 ///
 /// XXX: should this be separate from a `ProofError`?
-#[cfg(feature = "yoloproofs")]
+#[cfg(feature = "multiprover")]
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[cfg_attr(feature = "std", derive(Error))]
 pub enum R1CSError {
@@ -154,7 +154,7 @@ pub enum R1CSError {
     },
 }
 
-#[cfg(feature = "yoloproofs")]
+#[cfg(feature = "multiprover")]
 impl From<ProofError> for R1CSError {
     fn from(e: ProofError) -> R1CSError {
         match e {

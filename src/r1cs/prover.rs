@@ -1,7 +1,7 @@
 #![allow(non_snake_case)]
 
 use clear_on_drop::clear::Clear;
-use core::mem;
+
 use curve25519_dalek::ristretto::{CompressedRistretto, RistrettoPoint};
 use curve25519_dalek::scalar::Scalar;
 use curve25519_dalek::traits::{Identity, MultiscalarMul};
@@ -44,6 +44,7 @@ pub struct Prover<'t, 'g> {
 
     /// This list holds closures that will be called in the second phase of the protocol,
     /// when non-randomized variables are committed.
+    #[allow(clippy::type_complexity)]
     deferred_constraints: Vec<Box<dyn Fn(&mut RandomizingProver<'t, 'g>) -> Result<(), R1CSError>>>,
 
     /// Index of a pending multiplier that's not fully assigned yet.
@@ -359,7 +360,7 @@ impl<'t, 'g> Prover<'t, 'g> {
         // Clear the pending multiplier (if any) because it was committed into A_L/A_R/S.
         self.pending_multiplier = None;
 
-        if self.deferred_constraints.len() == 0 {
+        if self.deferred_constraints.is_empty() {
             self.transcript.r1cs_1phase_domain_sep();
             Ok(self)
         } else {
@@ -367,7 +368,7 @@ impl<'t, 'g> Prover<'t, 'g> {
             // Note: the wrapper could've used &mut instead of ownership,
             // but specifying lifetimes for boxed closures is not going to be nice,
             // so we move the self into wrapper and then move it back out afterwards.
-            let mut callbacks = mem::replace(&mut self.deferred_constraints, Vec::new());
+            let mut callbacks = std::mem::take(&mut self.deferred_constraints);
             let mut wrapped_self = RandomizingProver { prover: self };
             for callback in callbacks.drain(..) {
                 callback(&mut wrapped_self)?;
@@ -573,7 +574,7 @@ impl<'t, 'g> Prover<'t, 'g> {
             // r_poly.3 = y^n * s_R
             r_poly.3[i] = exp_y * sr;
 
-            exp_y = exp_y * y; // y^i -> y^(i+1)
+            exp_y *= y; // y^i -> y^(i+1)
         }
 
         let t_poly = util::VecPoly3::special_inner_product(&l_poly, &r_poly);
@@ -625,9 +626,10 @@ impl<'t, 'g> Prover<'t, 'g> {
         r_vec.append(&mut vec![Scalar::zero(); pad]);
 
         // XXX this should refer to the notes to explain why this is correct
+        #[allow(clippy::needless_range_loop)]
         for i in n..padded_n {
             r_vec[i] = -exp_y;
-            exp_y = exp_y * y; // y^i -> y^(i+1)
+            exp_y *= y; // y^i -> y^(i+1)
         }
 
         let i_blinding = i_blinding1 + u * i_blinding2;

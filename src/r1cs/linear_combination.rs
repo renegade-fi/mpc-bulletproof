@@ -5,7 +5,7 @@ use std::iter::FromIterator;
 use std::ops::{Add, Mul, Neg, Sub};
 
 /// Represents a variable in a constraint system.
-#[derive(Copy, Clone, Debug, PartialEq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum Variable {
     /// Represents an external input specified by a commitment.
     Committed(usize),
@@ -106,15 +106,9 @@ impl Mul<Variable> for Scalar {
 /// Represents a linear combination of
 /// [`Variables`](::r1cs::Variable).  Each term is represented by a
 /// `(Variable, Scalar)` pair.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct LinearCombination {
     pub(super) terms: Vec<(Variable, Scalar)>,
-}
-
-impl Default for LinearCombination {
-    fn default() -> Self {
-        LinearCombination { terms: Vec::new() }
-    }
 }
 
 impl FromIterator<(Variable, Scalar)> for LinearCombination {

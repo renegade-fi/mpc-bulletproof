@@ -15,7 +15,7 @@ pub struct VecPoly1(pub Vec<Scalar>, pub Vec<Scalar>);
 
 /// Represents a degree-3 vector polynomial
 /// \\(\mathbf{a} + \mathbf{b} \cdot x + \mathbf{c} \cdot x^2 + \mathbf{d} \cdot x^3 \\).
-#[cfg(feature = "yoloproofs")]
+#[cfg(feature = "multiprover")]
 pub struct VecPoly3(
     pub Vec<Scalar>,
     pub Vec<Scalar>,
@@ -28,7 +28,7 @@ pub struct Poly2(pub Scalar, pub Scalar, pub Scalar);
 
 /// Represents a degree-6 scalar polynomial, without the zeroth degree
 /// \\(a \cdot x + b \cdot x^2 + c \cdot x^3 + d \cdot x^4 + e \cdot x^5 + f \cdot x^6\\)
-#[cfg(feature = "yoloproofs")]
+#[cfg(feature = "multiprover")]
 pub struct Poly6 {
     pub t1: Scalar,
     pub t2: Scalar,
@@ -111,7 +111,7 @@ impl VecPoly1 {
     }
 }
 
-#[cfg(feature = "yoloproofs")]
+#[cfg(feature = "multiprover")]
 impl VecPoly3 {
     pub fn zero(n: usize) -> Self {
         VecPoly3(
@@ -149,6 +149,8 @@ impl VecPoly3 {
     pub fn eval(&self, x: Scalar) -> Vec<Scalar> {
         let n = self.0.len();
         let mut out = vec![Scalar::zero(); n];
+
+        #[allow(clippy::needless_range_loop)]
         for i in 0..n {
             out[i] = self.0[i] + x * (self.1[i] + x * (self.2[i] + x * self.3[i]));
         }
@@ -162,7 +164,7 @@ impl Poly2 {
     }
 }
 
-#[cfg(feature = "yoloproofs")]
+#[cfg(feature = "multiprover")]
 impl Poly6 {
     pub fn eval(&self, x: Scalar) -> Scalar {
         x * (self.t1 + x * (self.t2 + x * (self.t3 + x * (self.t4 + x * (self.t5 + x * self.t6)))))
@@ -188,7 +190,7 @@ impl Drop for Poly2 {
     }
 }
 
-#[cfg(feature = "yoloproofs")]
+#[cfg(feature = "multiprover")]
 impl Drop for VecPoly3 {
     fn drop(&mut self) {
         for e in self.0.iter_mut() {
@@ -206,7 +208,7 @@ impl Drop for VecPoly3 {
     }
 }
 
-#[cfg(feature = "yoloproofs")]
+#[cfg(feature = "multiprover")]
 impl Drop for Poly6 {
     fn drop(&mut self) {
         self.t1.clear();
