@@ -1,5 +1,5 @@
 #![allow(non_snake_case)]
-#![doc(include = "../../docs/range-proof-protocol.md")]
+#![doc = include_str!("../../docs/range-proof-protocol.md")]
 
 extern crate alloc;
 #[cfg(feature = "std")]
@@ -442,7 +442,7 @@ impl RangeProof {
                 .chain(bp_gens.H(n, m).map(|&x| Some(x)))
                 .chain(value_commitments.iter().map(|V| V.decompress())),
         )
-        .ok_or_else(|| ProofError::VerificationError)?;
+        .ok_or(ProofError::VerificationError)?;
 
         if mega_check.is_identity() {
             Ok(())
@@ -501,6 +501,7 @@ impl RangeProof {
     /// Deserializes the proof from a byte slice.
     ///
     /// Returns an error if the byte slice cannot be parsed into a `RangeProof`.
+    #[allow(clippy::erasing_op, clippy::identity_op)]
     pub fn from_bytes(slice: &[u8]) -> Result<RangeProof, ProofError> {
         if slice.len() % 32 != 0 {
             return Err(ProofError::FormatError);
@@ -617,7 +618,7 @@ mod tests {
         for _ in 0..n {
             power_g += (z - z2) * exp_y - z3 * exp_2;
 
-            exp_y = exp_y * y; // y^i -> y^(i+1)
+            exp_y *= y; // y^i -> y^(i+1)
             exp_2 = exp_2 + exp_2; // 2^i -> 2^(i+1)
         }
 

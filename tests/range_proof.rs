@@ -9,8 +9,6 @@ use merlin::Transcript;
 
 use bulletproofs::{BulletproofGens, PedersenGens, RangeProof};
 
-use hex;
-
 // Tests that proofs generated with v1.0.0 continue to verify in later versions.
 #[test]
 fn deserialize_and_verify() {
@@ -80,6 +78,7 @@ fn deserialize_and_verify() {
     let pc_gens = PedersenGens::default();
     let bp_gens = BulletproofGens::new(64, 8);
 
+    #[allow(clippy::needless_range_loop)]
     for i in 0..4 {
         for j in 0..4 {
             let (n, m) = (8 << i, 1 << j);

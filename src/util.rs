@@ -102,6 +102,8 @@ impl VecPoly1 {
     pub fn eval(&self, x: Scalar) -> Vec<Scalar> {
         let n = self.0.len();
         let mut out = vec![Scalar::zero(); n];
+
+        #[allow(clippy::needless_range_loop)]
         for i in 0..n {
             out[i] = self.0[i] + self.1[i] * x;
         }
@@ -225,9 +227,9 @@ pub fn scalar_exp_vartime(x: &Scalar, mut n: u64) -> Scalar {
     while n > 0 {
         let bit = n & 1;
         if bit == 1 {
-            result = result * aux;
+            result *= aux;
         }
-        n = n >> 1;
+        n >>= 1;
         aux = aux * aux; // FIXME: one unnecessary mult at the last step here!
     }
     result
@@ -250,7 +252,7 @@ pub fn sum_of_powers(x: &Scalar, n: usize) -> Scalar {
     while m > 2 {
         factor = factor * factor;
         result = result + factor * result;
-        m = m / 2;
+        m /= 2;
     }
     result
 }
@@ -302,7 +304,7 @@ mod tests {
     fn scalar_exp_vartime_slow(x: &Scalar, n: u64) -> Scalar {
         let mut result = Scalar::one();
         for _ in 0..n {
-            result = result * x;
+            result *= x;
         }
         result
     }
@@ -365,7 +367,7 @@ mod tests {
             unsafe { slice::from_raw_parts(x.as_ptr() as *const u8, mem::size_of_val(x)) }
         }
 
-        assert_eq!(flat_slice(&v.as_slice()), &[0u8; 64][..]);
+        assert_eq!(flat_slice(v.as_slice()), &[0u8; 64][..]);
         assert_eq!(v[0], Scalar::zero());
         assert_eq!(v[1], Scalar::zero());
     }

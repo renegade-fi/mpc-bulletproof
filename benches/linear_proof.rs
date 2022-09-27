@@ -1,4 +1,5 @@
 #![allow(non_snake_case)]
+#![allow(deprecated)]
 
 #[macro_use]
 extern crate criterion;
@@ -137,7 +138,7 @@ fn linear_verify(c: &mut Criterion) {
                     &mut rng,
                     &C,
                     r,
-                    a.clone(),
+                    a,
                     b.clone(),
                     G.clone(),
                     &F,
