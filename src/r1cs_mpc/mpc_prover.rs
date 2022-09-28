@@ -5,8 +5,10 @@ use std::net::SocketAddr;
 use curve25519_dalek::scalar::Scalar;
 use merlin::Transcript;
 use mpc_ristretto::{
+    authenticated_ristretto::AuthenticatedCompressedRistretto,
     authenticated_scalar::AuthenticatedScalar,
     beaver::SharedValueSource,
+    error::MpcError,
     fabric::AuthenticatedMpcFabric,
     network::{MpcNetwork, QuicTwoPartyNet},
     BeaverSource, SharedNetwork,
@@ -206,6 +208,7 @@ impl<'t, 'g, N: MpcNetwork + Send, S: SharedValueSource<Scalar>> ConstraintSyste
 }
 
 impl<'t, 'g, N: MpcNetwork + Send, S: SharedValueSource<Scalar>> MpcProver<'t, 'g, N, S> {
+    /// Evaluate a linear combination of allocated variables
     fn eval(&self, lc: &LinearCombination) -> AuthenticatedScalar<N, S> {
         lc.terms.iter().fold(
             self.mpc_fabric.allocate_public_u64(0),
@@ -219,5 +222,36 @@ impl<'t, 'g, N: MpcNetwork + Send, S: SharedValueSource<Scalar>> MpcProver<'t, '
                 }
             },
         )
+    }
+
+    /// From a privately held input value, secret share the value and commit to it
+    ///
+    /// The result is a variable allocated both in the MPC network and in the
+    /// constraint system; along with its respectively commitment.
+    pub fn commit(
+        &mut self,
+        owning_party: u64,
+        v: Scalar,
+        v_blinding: Scalar,
+    ) -> Result<(AuthenticatedCompressedRistretto<N, S>, Variable), MpcError> {
+        // Allocate the value in the MPC network
+        let shared_v = self.mpc_fabric.allocate_private_scalar(owning_party, v)?;
+        let shared_v_blinding = self
+            .mpc_fabric
+            .allocate_private_scalar(owning_party, v_blinding)?;
+
+        // Add the commitment to the transcript.
+        let value_commit = self
+            .pc_gens
+            .commit_shared(&shared_v, &shared_v_blinding)
+            .compress();
+        self.transcript.append_point(b"V", &value_commit.value());
+
+        // Add the value to the constraint system
+        let i = self.v.len();
+        self.v.push(shared_v);
+        self.v_blinding.push(shared_v_blinding);
+
+        Ok((value_commit, Variable::Committed(i)))
     }
 }

@@ -13,6 +13,10 @@ use curve25519_dalek::ristretto::RistrettoPoint;
 use curve25519_dalek::scalar::Scalar;
 use curve25519_dalek::traits::MultiscalarMul;
 use digest::{ExtendableOutput, Input, XofReader};
+use mpc_ristretto::authenticated_ristretto::AuthenticatedRistretto;
+use mpc_ristretto::authenticated_scalar::AuthenticatedScalar;
+use mpc_ristretto::beaver::SharedValueSource;
+use mpc_ristretto::network::MpcNetwork;
 use sha3::{Sha3XofReader, Sha3_512, Shake256};
 
 /// Represents a pair of base points for Pedersen commitments.
@@ -38,6 +42,19 @@ impl PedersenGens {
     /// Creates a Pedersen commitment using the value scalar and a blinding factor.
     pub fn commit(&self, value: Scalar, blinding: Scalar) -> RistrettoPoint {
         RistrettoPoint::multiscalar_mul(&[value, blinding], &[self.B, self.B_blinding])
+    }
+
+    /// Creates a Pedersen commitment using a shared scalar value and blinding factor.
+    pub fn commit_shared<N, S>(
+        &self,
+        value: &AuthenticatedScalar<N, S>,
+        blinding: &AuthenticatedScalar<N, S>,
+    ) -> AuthenticatedRistretto<N, S>
+    where
+        N: MpcNetwork + Send,
+        S: SharedValueSource<Scalar>,
+    {
+        value * self.B + blinding * self.B_blinding
     }
 }
 
