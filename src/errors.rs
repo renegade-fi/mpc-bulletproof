@@ -64,6 +64,18 @@ impl From<MPCError> for ProofError {
     }
 }
 
+/// Represents an error during the course of a multiprover execution
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "multiprover", derive(Error))]
+pub enum MultiproverError {
+    /// This error occurs when there is a setup error creating the MPC network
+    #[cfg_attr(
+        feature = "multiprover",
+        error("Error setting up MPCNet for collaborative proof")
+    )]
+    SetupFailed,
+}
+
 /// Represents an error during the multiparty computation protocol for
 /// proof aggregation.
 ///
