@@ -108,7 +108,7 @@ impl Mul<Variable> for Scalar {
 /// `(Variable, Scalar)` pair.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct LinearCombination {
-    pub(super) terms: Vec<(Variable, Scalar)>,
+    pub(crate) terms: Vec<(Variable, Scalar)>,
 }
 
 impl FromIterator<(Variable, Scalar)> for LinearCombination {

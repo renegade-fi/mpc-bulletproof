@@ -122,10 +122,30 @@ impl<'t, 'g, N: MpcNetwork + Send, S: SharedValueSource<Scalar>> ConstraintSyste
     #[allow(unused_variables)]
     fn multiply(
         &mut self,
-        left: LinearCombination,
-        right: LinearCombination,
+        mut left: LinearCombination,
+        mut right: LinearCombination,
     ) -> (Variable, Variable, Variable) {
-        todo!()
+        let l = self.eval(&left);
+        let r = self.eval(&right);
+        let o = &l * &r;
+
+        // Create new variables for the results
+        let l_var = Variable::MultiplierLeft(self.a_L.len());
+        let r_var = Variable::MultiplierRight(self.a_R.len());
+        let o_var = Variable::MultiplierOutput(self.a_O.len());
+
+        // Add the value assignments
+        self.a_L.push(l);
+        self.a_R.push(r);
+        self.a_O.push(o);
+
+        // Constrain the multiplication
+        left.terms.push((l_var, -Scalar::one()));
+        right.terms.push((r_var, -Scalar::one()));
+        self.constrain(left);
+        self.constrain(right);
+
+        (l_var, r_var, o_var)
     }
 
     fn allocate(&mut self, assignment: Option<Scalar>) -> Result<Variable, R1CSError> {
@@ -182,5 +202,22 @@ impl<'t, 'g, N: MpcNetwork + Send, S: SharedValueSource<Scalar>> ConstraintSyste
 
     fn constrain(&mut self, lc: LinearCombination) {
         self.constraints.push(lc)
+    }
+}
+
+impl<'t, 'g, N: MpcNetwork + Send, S: SharedValueSource<Scalar>> MpcProver<'t, 'g, N, S> {
+    fn eval(&self, lc: &LinearCombination) -> AuthenticatedScalar<N, S> {
+        lc.terms.iter().fold(
+            self.mpc_fabric.allocate_public_u64(0),
+            |acc, (var, coeff)| {
+                acc + match var {
+                    Variable::MultiplierLeft(i) => *coeff * &self.a_L[*i],
+                    Variable::MultiplierRight(i) => *coeff * &self.a_R[*i],
+                    Variable::MultiplierOutput(i) => *coeff * &self.a_O[*i],
+                    Variable::Committed(i) => *coeff * &self.v[*i],
+                    Variable::One() => *coeff * self.mpc_fabric.allocate_public_u64(1),
+                }
+            },
+        )
     }
 }
