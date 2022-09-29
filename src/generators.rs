@@ -6,6 +6,8 @@
 
 extern crate alloc;
 
+use core::cell::Ref;
+
 use alloc::vec::Vec;
 use curve25519_dalek::constants::RISTRETTO_BASEPOINT_COMPRESSED;
 use curve25519_dalek::constants::RISTRETTO_BASEPOINT_POINT;
@@ -16,8 +18,11 @@ use digest::{ExtendableOutput, Input, XofReader};
 use mpc_ristretto::authenticated_ristretto::AuthenticatedRistretto;
 use mpc_ristretto::authenticated_scalar::AuthenticatedScalar;
 use mpc_ristretto::beaver::SharedValueSource;
+use mpc_ristretto::fabric::AuthenticatedMpcFabric;
 use mpc_ristretto::network::MpcNetwork;
 use sha3::{Sha3XofReader, Sha3_512, Shake256};
+
+use crate::r1cs_mpc::mpc_prover::SharedMpcFabric;
 
 /// Represents a pair of base points for Pedersen commitments.
 ///
@@ -191,6 +196,19 @@ impl BulletproofGens {
         }
     }
 
+    /// Returns a view of the generator chain that allocates generators
+    /// as public curve points within an MPC network
+    pub fn as_mpc_values<N, S>(
+        &self,
+        fabric: SharedMpcFabric<N, S>,
+    ) -> AuthenticatedBulletproofGens<N, S>
+    where
+        N: MpcNetwork + Send,
+        S: SharedValueSource<Scalar>,
+    {
+        AuthenticatedBulletproofGens { gens: self, fabric }
+    }
+
     /// Increases the generators' capacity to the amount specified.
     /// If less than or equal to the current capacity, does nothing.
     pub fn increase_capacity(&mut self, new_capacity: usize) {
@@ -300,6 +318,51 @@ impl<'a> BulletproofGensShare<'a> {
     /// Return an iterator over this party's H generators with given size `n`.
     pub(crate) fn H(&self, n: usize) -> impl Iterator<Item = &'a RistrettoPoint> {
         self.gens.H_vec[self.share].iter().take(n)
+    }
+}
+
+/// Represents a view of the generator as a series of public AuthenticatedScalars
+///
+/// This allows for the generators to be used more easily in algebraic expressions
+/// with other network allocated values.
+#[derive(Clone)]
+pub struct AuthenticatedBulletproofGens<'a, N: MpcNetwork + Send, S: SharedValueSource<Scalar>> {
+    /// The parent object that this is a view into
+    gens: &'a BulletproofGens,
+    /// The Mpc fabric used to allocate values in
+    fabric: SharedMpcFabric<N, S>,
+}
+
+impl<'a, N: MpcNetwork + Send, S: SharedValueSource<Scalar>>
+    AuthenticatedBulletproofGens<'a, N, S>
+{
+    /// A convenience method to borrow the MPC fabric
+    fn borrow_fabric(&self) -> Ref<AuthenticatedMpcFabric<N, S>> {
+        self.fabric.as_ref().borrow()
+    }
+
+    /// Return an iterator over G generators viewed as `AuthenticatedRistretto`s with given size `n`.
+    pub fn G(&self, n: usize) -> impl Iterator<Item = AuthenticatedRistretto<N, S>> {
+        // It is necessary to materialize the mapping via collect to release the borrow on
+        // the mpc fabric that is leased in the map closure.
+        self.gens.G_vec[0]
+            .iter()
+            .map(|g| self.borrow_fabric().allocate_public_ristretto_point(*g))
+            .collect::<Vec<AuthenticatedRistretto<N, S>>>()
+            .into_iter()
+            .take(n)
+    }
+
+    /// Return an iterator over H generators viewed as `AuthenticatedRistretto`s with given size `n`.
+    pub(crate) fn H(&self, n: usize) -> impl Iterator<Item = AuthenticatedRistretto<N, S>> {
+        // It is necessary to materialize the mapping via collect to release the borrow on
+        // the mpc fabric that is leased in the map closure.
+        self.gens.H_vec[0]
+            .iter()
+            .map(|h| self.borrow_fabric().allocate_public_ristretto_point(*h))
+            .collect::<Vec<AuthenticatedRistretto<N, S>>>()
+            .into_iter()
+            .take(n)
     }
 }
 

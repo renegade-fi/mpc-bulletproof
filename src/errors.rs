@@ -3,6 +3,7 @@
 extern crate alloc;
 use alloc::vec::Vec;
 
+use mpc_ristretto::error::MpcError;
 #[cfg(feature = "std")]
 use thiserror::Error;
 
@@ -74,6 +75,15 @@ pub enum MultiproverError {
         error("Error setting up MPCNet for collaborative proof")
     )]
     SetupFailed,
+    /// This error wraps a R1CS error that occurs during proof generation
+    #[cfg_attr(feature = "multiprover", error("Error during proof generation"))]
+    ProverError(R1CSError),
+    /// This error wraps the MPC library's MpcError
+    #[cfg_attr(feature = "multiprover", error("Error during MPC communication"))]
+    Mpc(MpcError),
+    /// TODO: Remove this placeholder error
+    #[cfg_attr(feature = "multiprover", error("Functionality not yet implemented"))]
+    NotImplemented,
 }
 
 /// Represents an error during the multiparty computation protocol for
