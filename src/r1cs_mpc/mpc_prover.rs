@@ -366,6 +366,57 @@ impl<'t, 'g, N: MpcNetwork + Send, S: SharedValueSource<Scalar>> MpcProver<'t, '
         Ok((value_commit, Variable::Committed(i)))
     }
 
+    /// Use a challenge, `z`, to flatten the constraints in the
+    /// constraint system into vectors used for proving and
+    /// verification.
+    ///
+    /// # Output
+    ///
+    /// Returns a tuple of
+    /// ```text
+    /// (wL, wR, wO, wV)
+    /// ```
+    /// where `w{L,R,O}` is \\( z \cdot z^Q \cdot W_{L,R,O} \\).
+    #[allow(non_snake_case)]
+    fn flattened_constraints(
+        &mut self,
+        z: &Scalar,
+    ) -> (Vec<Scalar>, Vec<Scalar>, Vec<Scalar>, Vec<Scalar>) {
+        let n = self.a_L.len();
+        let m = self.v.len();
+
+        let mut wL = vec![Scalar::zero(); n];
+        let mut wR = vec![Scalar::zero(); n];
+        let mut wO = vec![Scalar::zero(); n];
+        let mut wV = vec![Scalar::zero(); m];
+
+        let mut exp_z = *z;
+        for lc in self.constraints.iter() {
+            for (var, coeff) in &lc.terms {
+                match var {
+                    Variable::MultiplierLeft(i) => {
+                        wL[*i] += exp_z * coeff;
+                    }
+                    Variable::MultiplierRight(i) => {
+                        wR[*i] += exp_z * coeff;
+                    }
+                    Variable::MultiplierOutput(i) => {
+                        wO[*i] += exp_z * coeff;
+                    }
+                    Variable::Committed(i) => {
+                        wV[*i] -= exp_z * coeff;
+                    }
+                    Variable::One() => {
+                        // The prover doesn't need to handle constant terms
+                    }
+                }
+            }
+            exp_z *= z;
+        }
+
+        (wL, wR, wO, wV)
+    }
+
     // Calls the callbacks that allocate randomized constraints
     // Theses are stored in the `deferred_constraints` field
     fn create_randomized_constraints(mut self) -> Result<Self, R1CSError> {
@@ -600,6 +651,21 @@ impl<'t, 'g, N: MpcNetwork + Send, S: SharedValueSource<Scalar>> MpcProver<'t, '
                     .allocate_public_compressed_ristretto(CompressedRistretto::identity()),
             )
         };
+
+        // Add the commitments to the transcript
+        self.transcript.append_point(b"A_I2", &A_I2.value());
+        self.transcript.append_point(b"A_O2", &A_O2.value());
+        self.transcript.append_point(b"S2", &A_S2.value());
+
+        // Compute the inner product challenges y and z
+        // These challenges rely on the fact that if a vector v has inner product 0 with
+        // a random challenge, it is overwhelmingly likely to be the zero vector.
+        // Construct these challenge vectors from increasing powers of y and z.
+        let y = self.transcript.challenge_scalar(b"y");
+        let z = self.transcript.challenge_scalar(b"z");
+
+        // The assignment matrices can be flattened by pre-multiplying with their challenge vector
+        let (wL, wR, wO, wV) = self.flattened_constraints(&z);
 
         Err(MultiproverError::NotImplemented)
     }
