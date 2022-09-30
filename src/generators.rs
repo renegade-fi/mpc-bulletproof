@@ -321,7 +321,7 @@ impl<'a> BulletproofGensShare<'a> {
     }
 }
 
-/// Represents a view of the generator as a series of public AuthenticatedScalars
+/// Represents a view of the generator as a series of public `AuthenticatedRistretto`s
 ///
 /// This allows for the generators to be used more easily in algebraic expressions
 /// with other network allocated values.

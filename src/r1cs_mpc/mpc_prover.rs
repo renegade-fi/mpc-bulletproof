@@ -7,7 +7,7 @@ use core::{
 use std::net::SocketAddr;
 
 use alloc::rc::Rc;
-use curve25519_dalek::scalar::Scalar;
+use curve25519_dalek::{ristretto::CompressedRistretto, scalar::Scalar, traits::Identity};
 use merlin::Transcript;
 use mpc_ristretto::{
     authenticated_ristretto::{AuthenticatedCompressedRistretto, AuthenticatedRistretto},
@@ -21,7 +21,10 @@ use mpc_ristretto::{
 
 use crate::{
     errors::{MultiproverError, R1CSError},
-    r1cs::{ConstraintSystem, LinearCombination, Variable},
+    r1cs::{
+        ConstraintSystem, LinearCombination, RandomizableConstraintSystem,
+        RandomizedConstraintSystem, Variable,
+    },
     transcript::TranscriptProtocol,
     BulletproofGens, PedersenGens,
 };
@@ -45,6 +48,11 @@ pub(crate) type SharedMpcFabric<N, S> = Rc<RefCell<AuthenticatedMpcFabric<N, S>>
 ///       where W_l, W_r, W_o, W_v are the respective vectors of weights, and
 ///       are typically very sparse. These are represented in the constraints
 ///       field, which is a sparse representation of the weight matrices.
+///
+/// As well, Bulletproofs allow for constraints to be added "on the fly" during the proving process.
+/// These constraints are called "randomized constraints" as they have access to random Fiat-Shamir
+/// challenges from the protocol transcript that preceeds them. These constraints are encoded in the
+/// `deferred_constraints` field.
 #[allow(dead_code, non_snake_case)]
 pub struct MpcProver<'t, 'g, N: MpcNetwork + Send, S: SharedValueSource<Scalar>> {
     /// The protocol transcript, used for constructing Fiat-Shamir challenges
@@ -66,8 +74,21 @@ pub struct MpcProver<'t, 'g, N: MpcNetwork + Send, S: SharedValueSource<Scalar>>
     v_blinding: Vec<AuthenticatedScalar<N, S>>,
     /// Index of a pending multiplier that hasn't been assigned yet
     pending_multiplier: Option<usize>,
+    /// This list holds closures that will be called in the second phase of the protocol,
+    /// when non-randomized variables are committed.
+    #[allow(clippy::type_complexity)]
+    deferred_constraints:
+        Vec<Box<dyn Fn(&mut RandomizingMpcProver<'t, 'g, N, S>) -> Result<(), R1CSError>>>,
     /// The MPC Fabric used to allocate values
     mpc_fabric: SharedMpcFabric<N, S>,
+}
+
+/// A prover in the randomizing phase.
+///
+/// In this phase constraints may be built using challenge scalars derived from the
+/// protocol transcript so far.
+pub struct RandomizingMpcProver<'t, 'g, N: MpcNetwork + Send, S: SharedValueSource<Scalar>> {
+    prover: MpcProver<'t, 'g, N, S>,
 }
 
 impl<'t, 'g, S: SharedValueSource<Scalar>> MpcProver<'t, 'g, QuicTwoPartyNet, S> {
@@ -98,6 +119,7 @@ impl<'t, 'g, S: SharedValueSource<Scalar>> MpcProver<'t, 'g, QuicTwoPartyNet, S>
             a_O: Vec::new(),
             v: Vec::new(),
             v_blinding: Vec::new(),
+            deferred_constraints: Vec::new(),
             pending_multiplier: None,
         })
     }
@@ -128,6 +150,7 @@ impl<'t, 'g, N: MpcNetwork + Send, S: SharedValueSource<Scalar>> MpcProver<'t, '
             a_O: Vec::new(),
             v: Vec::new(),
             v_blinding: Vec::new(),
+            deferred_constraints: Vec::new(),
             pending_multiplier: None,
         }
     }
@@ -236,6 +259,63 @@ impl<'t, 'g, N: MpcNetwork + Send, S: SharedValueSource<Scalar>> ConstraintSyste
     }
 }
 
+impl<'t, 'g, N: MpcNetwork + Send, S: SharedValueSource<Scalar>> RandomizableConstraintSystem
+    for MpcProver<'t, 'g, N, S>
+{
+    type RandomizedCS = RandomizingMpcProver<'t, 'g, N, S>;
+
+    fn specify_randomized_constraints<F>(&mut self, callback: F) -> Result<(), R1CSError>
+    where
+        F: 'static + Fn(&mut Self::RandomizedCS) -> Result<(), R1CSError>,
+    {
+        self.deferred_constraints.push(Box::new(callback));
+        Ok(())
+    }
+}
+
+impl<'t, 'g, N: MpcNetwork + Send, S: SharedValueSource<Scalar>> ConstraintSystem
+    for RandomizingMpcProver<'t, 'g, N, S>
+{
+    fn transcript(&mut self) -> &mut Transcript {
+        self.prover.transcript()
+    }
+
+    fn multiply(
+        &mut self,
+        left: LinearCombination,
+        right: LinearCombination,
+    ) -> (Variable, Variable, Variable) {
+        self.prover.multiply(left, right)
+    }
+
+    fn allocate(&mut self, assignment: Option<Scalar>) -> Result<Variable, R1CSError> {
+        self.prover.allocate(assignment)
+    }
+
+    fn allocate_multiplier(
+        &mut self,
+        input_assignments: Option<(Scalar, Scalar)>,
+    ) -> Result<(Variable, Variable, Variable), R1CSError> {
+        self.prover.allocate_multiplier(input_assignments)
+    }
+
+    fn multipliers_len(&self) -> usize {
+        self.prover.multipliers_len()
+    }
+
+    fn constrain(&mut self, lc: LinearCombination) {
+        self.prover.constrain(lc)
+    }
+}
+
+impl<'t, 'g, N: MpcNetwork + Send, S: SharedValueSource<Scalar>> RandomizedConstraintSystem
+    for RandomizingMpcProver<'t, 'g, N, S>
+{
+    fn challenge_scalar(&mut self, label: &'static [u8]) -> Scalar {
+        self.prover.transcript.challenge_scalar(label)
+    }
+}
+
 impl<'t, 'g, N: MpcNetwork + Send, S: SharedValueSource<Scalar>> MpcProver<'t, 'g, N, S> {
     /// Evaluate a linear combination of allocated variables
     fn eval(&self, lc: &LinearCombination) -> AuthenticatedScalar<N, S> {
@@ -286,6 +366,29 @@ impl<'t, 'g, N: MpcNetwork + Send, S: SharedValueSource<Scalar>> MpcProver<'t, '
         Ok((value_commit, Variable::Committed(i)))
     }
 
+    // Calls the callbacks that allocate randomized constraints
+    // Theses are stored in the `deferred_constraints` field
+    fn create_randomized_constraints(mut self) -> Result<Self, R1CSError> {
+        // Clear the pending multiplier (if any) because it was committed into A_L/A_R/S.
+        self.pending_multiplier = None;
+
+        if self.deferred_constraints.is_empty() {
+            self.transcript.r1cs_1phase_domain_sep();
+            Ok(self)
+        } else {
+            self.transcript.r1cs_2phase_domain_sep();
+            // Note: the wrapper could've used &mut instead of ownership,
+            // but specifying lifetimes for boxed closures is not going to be nice,
+            // so we move the self into wrapper and then move it back out afterwards.
+            let mut callbacks = std::mem::take(&mut self.deferred_constraints);
+            let mut wrapped_self = RandomizingMpcProver { prover: self };
+            for callback in callbacks.drain(..) {
+                callback(&mut wrapped_self)?;
+            }
+            Ok(wrapped_self.prover)
+        }
+    }
+
     /// Consume this `ConstraintSystem` and produce a shared proof
     /// TODO: Remove these clippy allowances
     #[allow(non_snake_case, unused_variables, unused_mut)]
@@ -329,7 +432,6 @@ impl<'t, 'g, N: MpcNetwork + Send, S: SharedValueSource<Scalar>> MpcProver<'t, '
         // Both parties use the same generator chain here. We do this to avoid communication
         // overhead; as a multiscalar mul with a public generator chain will not induce
         // communication, all Pedersen commitments can be computed locally.
-        // let gens = bp_gens.share(0 /* party_id */);
         let gens = bp_gens.as_mpc_values(self.mpc_fabric.clone());
 
         // Multiplicative depth of the circuit
@@ -380,7 +482,8 @@ impl<'t, 'g, N: MpcNetwork + Send, S: SharedValueSource<Scalar>> MpcProver<'t, '
         let A_O1 = AuthenticatedRistretto::multiscalar_mul(
             iter::once(&o_blinding1).chain(self.a_O.iter()),
             iter::once(B_blinding.clone()).chain(gens.G(n1)),
-        );
+        )
+        .compress();
 
         // Construct a commitment to the blinding factors used in the inner product proofs
         // This commitment has the form
@@ -391,8 +494,112 @@ impl<'t, 'g, N: MpcNetwork + Send, S: SharedValueSource<Scalar>> MpcProver<'t, '
             iter::once(&s_blinding1)
                 .chain(s_L1.iter())
                 .chain(s_R1.iter()),
-            iter::once(B_blinding).chain(gens.G(n1)).chain(gens.H(n1)),
+            iter::once(B_blinding.clone())
+                .chain(gens.G(n1))
+                .chain(gens.H(n1)),
+        )
+        .compress();
+
+        // Add the commitments to the transcript, these are used to generate Fiat-Shamir challenges
+        self.transcript.append_point(b"A_I1", &A_I1.value());
+        self.transcript.append_point(b"A_O1", &A_O1.value());
+        self.transcript.append_point(b"S1", &A_S1.value());
+
+        // Begin phase 2 of the commitments
+        // In this phase, we have initialized the Fiat-Shamir transcript with the commitments
+        // from phase 1. We can now specify "randomized constraints" in which the constraints
+        // have access to Fiat-Shamir style challenge scalars. These constraints are specified
+        // via callbacks stored in the `deferred_constraints` vector.
+        // 1. Process the phase 2 constraints via their callbacks
+        self = self
+            .create_randomized_constraints()
+            .map_err(MultiproverError::ProverError)?;
+
+        // The range proof requires that the constraint length be a power of 2, so we pad
+        let n = self.a_L.len();
+        let n2 = n - n1;
+        let padded_n = self.a_L.len().next_power_of_two();
+        let pad = padded_n - n;
+
+        if bp_gens.gens_capacity < padded_n {
+            return Err(MultiproverError::ProverError(
+                R1CSError::InvalidGeneratorsLength,
+            ));
+        }
+
+        // Commit to the low-level witness data, a_l, a_r, a_o in the multiplication
+        // gates from phase 2
+        let has_2nd_phase_commitments = n2 > 0;
+
+        // We once again need to allocate a series of blinding factors for the commitments
+        // Here we need 3 + 2 * n2 blinding factors
+        let blinding_factors = self
+            .borrow_fabric()
+            .allocate_random_scalars_batch(3 + 2 * n2, &mut rng)
+            .map_err(MultiproverError::Mpc)?;
+
+        let (i_blinding2, o_blinding2, s_blinding2) = (
+            blinding_factors[0].clone(),
+            blinding_factors[1].clone(),
+            blinding_factors[2].clone(),
         );
+
+        let mut s_L2 = blinding_factors[3..3 + n2].to_vec();
+        let mut s_R2 = blinding_factors[3 + n2..3 + 2 * n2].to_vec();
+
+        // Commit to the second phase input, outputs, and blinding factors as above
+        // If there are no second phase commitments, we can skip this and reutrn the identity
+        let (A_I2, A_O2, A_S2) = if has_2nd_phase_commitments {
+            (
+                // Commit to the left and right inputs to the multiplication gates from phase 2
+                // This commitment has the form:
+                //      A_I = <a_L, G> + <a_R, H> + i_blinding * B_blinding
+                // where G and H are the vectors of generators for the curve group, and B_blinding
+                // is the blinding Pedersen generator.
+                AuthenticatedRistretto::multiscalar_mul(
+                    iter::once(&i_blinding2)
+                        .chain(self.a_L.iter().skip(n1))
+                        .chain(self.a_R.iter().skip(n1)),
+                    iter::once(B_blinding.clone())
+                        .chain(gens.G(n).skip(n1))
+                        .chain(gens.H(n).skip(n1)),
+                )
+                .compress(),
+                // Commit to the outputs of the multiplication gates from phase 2
+                // This commitment has the form
+                //      A_O = <a_O, G> + o_blinding * B_blinding
+                // where G is a vector of generators for the curve group, and B_blinding
+                // is the blinding Pedersen generator.
+                AuthenticatedRistretto::multiscalar_mul(
+                    iter::once(&o_blinding2).chain(self.a_O.iter().skip(n1)),
+                    iter::once(B_blinding.clone()).chain(gens.G(n).skip(n1)),
+                )
+                .compress(),
+                // Commit to the blinding factors used in the inner product proofs
+                // This commitment has the form
+                //    A_S = <s_L, G> + <s_R, H> + s_blinding * B_blinding
+                // where G, H, and B_blinding are generators as above. s_L and s_R are vectors of blinding
+                // factors used to hide a_L and a_R in the inner product proofs respectively.
+                AuthenticatedRistretto::multiscalar_mul(
+                    iter::once(&s_blinding2)
+                        .chain(s_L2.iter())
+                        .chain(s_R2.iter()),
+                    iter::once(B_blinding)
+                        .chain(gens.G(n).skip(n1))
+                        .chain(gens.H(n).skip(n1)),
+                )
+                .compress(),
+            )
+        } else {
+            (
+                self.borrow_fabric()
+                    .allocate_public_compressed_ristretto(CompressedRistretto::identity()),
+                self.borrow_fabric()
+                    .allocate_public_compressed_ristretto(CompressedRistretto::identity()),
+                self.borrow_fabric()
+                    .allocate_public_compressed_ristretto(CompressedRistretto::identity()),
+            )
+        };
 
         Err(MultiproverError::NotImplemented)
     }
