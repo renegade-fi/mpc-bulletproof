@@ -136,22 +136,11 @@ impl<N: MpcNetwork + Send, S: SharedValueSource<Scalar>> AuthenticatedVecPoly1<N
     /// Constructs the zero polynomial over the field of `AuthenticatedScalar`s represented
     /// as a degree 1 polynomial
     pub fn zero(n: usize, fabric: SharedMpcFabric<N, S>) -> Self {
-        let zero_elem = fabric
-            .as_ref()
-            .borrow()
-            .allocate_public_scalar(Scalar::zero());
-
-        macro_rules! allocate_zeros {
-            () => {{
-                let mut v = Vec::with_capacity(n);
-                for _ in 0..n {
-                    v.push(zero_elem.clone());
-                }
-                v
-            }};
-        }
-
-        AuthenticatedVecPoly1(allocate_zeros!(), allocate_zeros!())
+        let fabric_borrow = fabric.as_ref().borrow();
+        AuthenticatedVecPoly1(
+            fabric_borrow.allocate_zeros(n),
+            fabric_borrow.allocate_zeros(n),
+        )
     }
 
     /// Returns the inner product of two vectors of degree 1 polynomials
@@ -184,26 +173,12 @@ impl<N: MpcNetwork + Send, S: SharedValueSource<Scalar>> AuthenticatedVecPoly3<N
     /// Returns the zero polynomial over the field of `AuthenticatedScalar`s represented
     /// as a degree 3 polynomial
     pub fn zero(n: usize, fabric: SharedMpcFabric<N, S>) -> Self {
-        let zero_elem = fabric
-            .as_ref()
-            .borrow()
-            .allocate_public_scalar(Scalar::zero());
-
-        macro_rules! allocate_zeros {
-            () => {{
-                let mut v = Vec::with_capacity(n);
-                for _ in 0..n {
-                    v.push(zero_elem.clone());
-                }
-                v
-            }};
-        }
-
+        let fabric_borrow = fabric.as_ref().borrow();
         AuthenticatedVecPoly3(
-            allocate_zeros!(),
-            allocate_zeros!(),
-            allocate_zeros!(),
-            allocate_zeros!(),
+            fabric_borrow.allocate_zeros(n),
+            fabric_borrow.allocate_zeros(n),
+            fabric_borrow.allocate_zeros(n),
+            fabric_borrow.allocate_zeros(n),
         )
     }
 
@@ -235,25 +210,25 @@ impl<N: MpcNetwork + Send, S: SharedValueSource<Scalar>> AuthenticatedVecPoly3<N
     }
 
     /// Evaluates the polynomial at `x`
-    pub fn eval(&self, x: AuthenticatedScalar<N, S>) -> Vec<AuthenticatedScalar<N, S>> {
+    pub fn eval(&self, x: &AuthenticatedScalar<N, S>) -> Vec<AuthenticatedScalar<N, S>> {
         (0..self.0.len())
-            .map(|i| &self.0[i] + &x * (&self.1[i] + &x * (&self.2[i] + &x * &self.3[i])))
+            .map(|i| &self.0[i] + x * (&self.1[i] + x * (&self.2[i] + x * &self.3[i])))
             .collect::<Vec<AuthenticatedScalar<N, S>>>()
     }
 }
 
 impl<N: MpcNetwork + Send, S: SharedValueSource<Scalar>> AuthenticatedPoly2<N, S> {
     /// Evaluates the polynomial at `x`
-    pub fn eval(&self, x: AuthenticatedScalar<N, S>) -> AuthenticatedScalar<N, S> {
-        &self.0 + &x * (&self.1 + &x * &self.2)
+    pub fn eval(&self, x: &AuthenticatedScalar<N, S>) -> AuthenticatedScalar<N, S> {
+        &self.0 + x * (&self.1 + x * &self.2)
     }
 }
 
 impl<N: MpcNetwork + Send, S: SharedValueSource<Scalar>> AuthenticatedPoly6<N, S> {
     /// Evaluates the polynomial at `x`
-    pub fn eval(&self, x: AuthenticatedScalar<N, S>) -> AuthenticatedScalar<N, S> {
-        &x * (&self.t1
-            + &x * (&self.t2 + &x * (&self.t3 + &x * (&self.t4 + &x * (&self.t5 + &x * &self.t6)))))
+    pub fn eval(&self, x: &AuthenticatedScalar<N, S>) -> AuthenticatedScalar<N, S> {
+        x * (&self.t1
+            + x * (&self.t2 + x * (&self.t3 + x * (&self.t4 + x * (&self.t5 + x * &self.t6)))))
     }
 }
 

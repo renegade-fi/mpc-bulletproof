@@ -26,10 +26,13 @@ use crate::{
         RandomizedConstraintSystem, Variable,
     },
     transcript::TranscriptProtocol,
-    BulletproofGens, PedersenGens,
+    util, BulletproofGens, PedersenGens,
 };
 
-use super::proof::SharedR1CSProof;
+use super::{
+    authenticated_poly::{AuthenticatedPoly6, AuthenticatedVecPoly3},
+    proof::SharedR1CSProof,
+};
 
 /// A convenience wrapper around an MPC fabric with multiple owners
 pub(crate) type SharedMpcFabric<N, S> = Rc<RefCell<AuthenticatedMpcFabric<N, S>>>;
@@ -377,18 +380,23 @@ impl<'t, 'g, N: MpcNetwork + Send, S: SharedValueSource<Scalar>> MpcProver<'t, '
     /// (wL, wR, wO, wV)
     /// ```
     /// where `w{L,R,O}` is \\( z \cdot z^Q \cdot W_{L,R,O} \\).
-    #[allow(non_snake_case)]
+    #[allow(non_snake_case, clippy::type_complexity)]
     fn flattened_constraints(
         &mut self,
         z: &Scalar,
-    ) -> (Vec<Scalar>, Vec<Scalar>, Vec<Scalar>, Vec<Scalar>) {
+    ) -> (
+        Vec<AuthenticatedScalar<N, S>>,
+        Vec<AuthenticatedScalar<N, S>>,
+        Vec<AuthenticatedScalar<N, S>>,
+        Vec<AuthenticatedScalar<N, S>>,
+    ) {
         let n = self.a_L.len();
         let m = self.v.len();
 
-        let mut wL = vec![Scalar::zero(); n];
-        let mut wR = vec![Scalar::zero(); n];
-        let mut wO = vec![Scalar::zero(); n];
-        let mut wV = vec![Scalar::zero(); m];
+        let mut wL = self.borrow_fabric().allocate_zeros(n);
+        let mut wR = self.borrow_fabric().allocate_zeros(n);
+        let mut wO = self.borrow_fabric().allocate_zeros(n);
+        let mut wV = self.borrow_fabric().allocate_zeros(m);
 
         let mut exp_z = *z;
         for lc in self.constraints.iter() {
@@ -493,8 +501,7 @@ impl<'t, 'g, N: MpcNetwork + Send, S: SharedValueSource<Scalar>> MpcProver<'t, '
         // and n1 for each of the s_L, s_R terms that are used to blind a_L and a_R directly.
         let blinding_factors = self
             .borrow_fabric()
-            .allocate_random_scalars_batch(3 + 2 * n1, &mut rng)
-            .map_err(MultiproverError::Mpc)?;
+            .allocate_random_scalars_batch(3 + 2 * n1);
 
         let (i_blinding1, o_blinding1, s_blinding1) = (
             blinding_factors[0].clone(),
@@ -586,8 +593,7 @@ impl<'t, 'g, N: MpcNetwork + Send, S: SharedValueSource<Scalar>> MpcProver<'t, '
         // Here we need 3 + 2 * n2 blinding factors
         let blinding_factors = self
             .borrow_fabric()
-            .allocate_random_scalars_batch(3 + 2 * n2, &mut rng)
-            .map_err(MultiproverError::Mpc)?;
+            .allocate_random_scalars_batch(3 + 2 * n2);
 
         let (i_blinding2, o_blinding2, s_blinding2) = (
             blinding_factors[0].clone(),
@@ -661,11 +667,197 @@ impl<'t, 'g, N: MpcNetwork + Send, S: SharedValueSource<Scalar>> MpcProver<'t, '
         // These challenges rely on the fact that if a vector v has inner product 0 with
         // a random challenge, it is overwhelmingly likely to be the zero vector.
         // Construct these challenge vectors from increasing powers of y and z.
-        let y = self.transcript.challenge_scalar(b"y");
-        let z = self.transcript.challenge_scalar(b"z");
+        // TODO: How to construct a secret sharing of these values?
+        let y = self
+            .transcript
+            .shared_challenge_scalar(b"y", self.mpc_fabric.clone())
+            .open_and_authenticate()
+            .map_err(MultiproverError::Mpc)?
+            .to_scalar();
+        let z = self
+            .transcript
+            .shared_challenge_scalar(b"z", self.mpc_fabric.clone())
+            .open_and_authenticate()
+            .map_err(MultiproverError::Mpc)?
+            .to_scalar();
 
         // The assignment matrices can be flattened by pre-multiplying with their challenge vector
         let (wL, wR, wO, wV) = self.flattened_constraints(&z);
+
+        // l_poly and r_poly form the core of the R1CS satisfaction argument, they are constructed
+        // to allow us to collapse a sum of inner products into a single inner product. The value
+        // we are truly proving knowledge of is encoded in the second degree monomial coefficient (t_2)
+        // of <l_poly, r_poly>. We commit to the coefficients of l_poly and r_poly, and evaluate
+        // the full inner product t(x) = <l(x), r(x)> at a challenge point; where the verifier
+        // substitues in the expected value for t_2
+        let mut l_poly = AuthenticatedVecPoly3::zero(n, self.mpc_fabric.clone());
+        let mut r_poly = AuthenticatedVecPoly3::zero(n, self.mpc_fabric.clone());
+
+        // A sequence of challenge scalars for a_l \dot a_r - a_o
+        // These challenges are public values, we can invert and construct them as plain scalars
+        // and then wrap them in network allocated values.
+        let mut exp_y = Scalar::one();
+        let y_inv = y.invert();
+        let exp_y_inv = util::exp_iter(y_inv).take(padded_n).collect::<Vec<_>>();
+
+        // Chain together the blinding factors for the multiplication gate inputs
+        let sLsR = s_L1
+            .iter()
+            .chain(s_L2.iter())
+            .zip(s_R1.iter().chain(s_R2.iter()));
+
+        for (i, (sl, sr)) in sLsR.enumerate() {
+            // Assign coefficients to the polynomials l_poly and r_poly
+            // See https://doc-internal.dalek.rs/bulletproofs/notes/r1cs_proof/index.html#blinding-the-inner-product
+            // for a derivation
+
+            // 1st degree coefficient is: a_l + y^-n * w_r
+            l_poly.1[i] = &self.a_L[i] + exp_y_inv[i] * &wR[i];
+            // 2nd degree coefficient is: a_o
+            l_poly.2[i] = self.a_O[i].clone();
+            // 3rd degree coefficient is: s_L
+            l_poly.3[i] = sl.clone();
+
+            // 0th degree coefficient is: w_o - y^n
+            r_poly.0[i] = &wO[i] - exp_y;
+            // 1st degree coefficient is: y^n * a_r + w_l
+            r_poly.1[i] = exp_y * &self.a_R[i] + &wL[i];
+            // 2nd degree coefficient is: 0
+            // 3rd degree coefficient is: y^n * s_R
+            r_poly.3[i] = exp_y * sr;
+
+            // Incrementally exponentiate the challenge scalar `y`
+            exp_y *= y;
+        }
+
+        // The core of the proof is two fold. Let the polynomial below be t(x) = <l(x), r(x)>; we prove:
+        //      1. That the second degree coefficient of t(x) equals the public verifier input, encoding
+        //         the R1CS constraint system's assignment
+        //      2. An inner product proof that t(x) = <l(x), r(x)>
+        let t_poly = AuthenticatedVecPoly3::special_inner_product(&l_poly, &r_poly);
+        let t_blinding_factors = self.borrow_fabric().allocate_random_scalars_batch(5);
+
+        // Commit to the coefficients of t_poly using the blinding factors
+        let T_1 = self
+            .pc_gens
+            .commit_shared(&t_poly.t1, &t_blinding_factors[0]);
+        let T_3 = self
+            .pc_gens
+            .commit_shared(&t_poly.t3, &t_blinding_factors[1]);
+        let T_4 = self
+            .pc_gens
+            .commit_shared(&t_poly.t4, &t_blinding_factors[2]);
+        let T_5 = self
+            .pc_gens
+            .commit_shared(&t_poly.t5, &t_blinding_factors[3]);
+        let T_6 = self
+            .pc_gens
+            .commit_shared(&t_poly.t6, &t_blinding_factors[4]);
+
+        // Add the commitments to the transcript
+        self.transcript
+            .append_point(b"T_1", &T_1.to_ristretto().compress());
+        self.transcript
+            .append_point(b"T_3", &T_3.to_ristretto().compress());
+        self.transcript
+            .append_point(b"T_4", &T_4.to_ristretto().compress());
+        self.transcript
+            .append_point(b"T_5", &T_5.to_ristretto().compress());
+        self.transcript
+            .append_point(b"T_6", &T_6.to_ristretto().compress());
+
+        // Sample two more challenge scalars:
+        //    - `u` is used to create a random linear combination of the non-randomized and randomized
+        //      commitments to the polynomials l(x) and r(x). The randomized component comes from the
+        //      deferred constraints, evaluated above
+        //    - `x` is used to construct the challenge point `X` for the inner product proof
+        let u = self
+            .transcript
+            .shared_challenge_scalar(b"u", self.mpc_fabric.clone())
+            .open_and_authenticate()
+            .map_err(MultiproverError::Mpc)?
+            .to_scalar();
+        let x = self
+            .transcript
+            .shared_challenge_scalar(b"x", self.mpc_fabric.clone())
+            .open_and_authenticate()
+            .map_err(MultiproverError::Mpc)?;
+
+        // Because we do not commit to T_2 directly, we commit to its replacement blinding factor that
+        // will satisfy the equality: https://doc-internal.dalek.rs/bulletproofs/notes/r1cs_proof/index.html#proving-that-t_2-is-correct
+        let t_2_blinding: AuthenticatedScalar<N, S> = wV
+            .iter()
+            .zip(self.v_blinding.iter())
+            .map(|(c, v_blinding)| c * v_blinding)
+            .sum();
+
+        let t_blinding_poly = AuthenticatedPoly6 {
+            t1: blinding_factors[0].clone(),
+            t2: t_2_blinding,
+            t3: blinding_factors[1].clone(),
+            t4: blinding_factors[2].clone(),
+            t5: blinding_factors[3].clone(),
+            t6: blinding_factors[4].clone(),
+        };
+
+        // Evaluate t(x) and \tilde{t}(x) (blinding poly) at the challenge point `x`
+        let t_x = t_poly.eval(&x);
+        let t_x_blinding = t_blinding_poly.eval(&x);
+        let mut l_vec = l_poly.eval(&x);
+        l_vec.append(&mut self.borrow_fabric().allocate_zeros(pad));
+
+        let mut r_vec = r_poly.eval(&x);
+        r_vec.append(&mut self.borrow_fabric().allocate_zeros(pad));
+
+        // To prove correctness, we need the values y^n * a_r and y^n * s_r (see notes)
+        // but the values y^n are not known until after committing to a_r, s_r. So, we
+        // change the generator chain H to be y^-n * H; giving us a commitment <y^n * a_r, y^-n * H>
+        // Place in a separate closure to limit the borrow's liftime
+        {
+            let borrowed_fabric = self.borrow_fabric();
+            #[allow(clippy::needless_range_loop)]
+            for i in n..padded_n {
+                r_vec[i] = borrowed_fabric.allocate_public_scalar(-exp_y);
+                exp_y *= y;
+            }
+        } // borrowed_fabric lifetime finished
+
+        // Take a random linear combination (parameterized by `u`) of the phase 1 and phase 2 blinding factors
+        let i_blinding = i_blinding1 + u * i_blinding2;
+        let o_blinding = o_blinding1 + u * o_blinding2;
+        let s_blinding = s_blinding1 + u * s_blinding2;
+
+        let e_blinding = &x * (i_blinding + &x * (o_blinding + &x * s_blinding));
+
+        // Append values to transcript
+        self.transcript.append_scalar(b"t_x", &t_x.to_scalar());
+        self.transcript
+            .append_scalar(b"t_x_blinding", &t_x_blinding.to_scalar());
+        self.transcript
+            .append_scalar(b"e_blinding", &e_blinding.to_scalar());
+
+        // Sample another challenge scalar, this time for the inner product proof
+        let w = self
+            .transcript
+            .shared_challenge_scalar(b"w", self.mpc_fabric.clone())
+            .open_and_authenticate()
+            .map_err(MultiproverError::Mpc)?;
+        let Q = w * self.pc_gens.B;
+
+        // Chain together the generators from the phase 1 proof and those generators multiplied by
+        // `u`; which represent the generators for the phase 2 proof
+        let G_factors = iter::repeat(Scalar::one())
+            .take(n1)
+            .chain(iter::repeat(u).take(n2 + pad))
+            .collect::<Vec<_>>();
+        let H_factors = exp_y_inv
+            .into_iter()
+            .zip(G_factors.iter())
+            .map(|(y, u_or_1)| y * u_or_1)
+            .collect::<Vec<_>>();
+
+        // Finally, build the inner product proof for the R1CS relation
+        // TODO: IPP
 
         Err(MultiproverError::NotImplemented)
     }
