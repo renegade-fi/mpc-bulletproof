@@ -450,6 +450,12 @@ impl<'t, 'g, N: MpcNetwork + Send, S: SharedValueSource<Scalar>> MpcProver<'t, '
 
     /// Consume this `ConstraintSystem` and produce a shared proof
     /// TODO: Remove these clippy allowances
+    ///
+    /// Throughout proof generation we open intermediate proof results that go into
+    /// the transcript. This is in order to keep the transcripts of the provers in sync
+    /// as they derive Fiat-Shamir challenges from these transcripts. This is simpler
+    /// than deriving the challenges in secret sharing space as we would have to hash
+    /// within the MPC circuit, and implement a hasher on top of the authenticated field.
     #[allow(non_snake_case, unused_variables, unused_mut)]
     pub fn prove(
         mut self,
@@ -530,6 +536,8 @@ impl<'t, 'g, N: MpcNetwork + Send, S: SharedValueSource<Scalar>> MpcProver<'t, '
                 .chain(gens.G(n1))
                 .chain(gens.H(n1)),
         )
+        .open_and_authenticate()
+        .map_err(MultiproverError::Mpc)?
         .compress();
 
         // Construct a commitment to the multiplication gate outputs a_O
@@ -541,14 +549,16 @@ impl<'t, 'g, N: MpcNetwork + Send, S: SharedValueSource<Scalar>> MpcProver<'t, '
             iter::once(&o_blinding1).chain(self.a_O.iter()),
             iter::once(B_blinding.clone()).chain(gens.G(n1)),
         )
+        .open_and_authenticate()
+        .map_err(MultiproverError::Mpc)?
         .compress();
 
         // Construct a commitment to the blinding factors used in the inner product proofs
         // This commitment has the form
-        //    A_S = <s_L, G> + <s_R, H> + s_blinding * B_blinding
+        //    S = <s_L, G> + <s_R, H> + s_blinding * B_blinding
         // where G, H, and B_blinding are generators as above. s_L and s_R are vectors of blinding
         // factors used to hide a_L and a_R in the inner product proofs respectively.
-        let A_S1 = AuthenticatedRistretto::multiscalar_mul(
+        let S1 = AuthenticatedRistretto::multiscalar_mul(
             iter::once(&s_blinding1)
                 .chain(s_L1.iter())
                 .chain(s_R1.iter()),
@@ -556,12 +566,14 @@ impl<'t, 'g, N: MpcNetwork + Send, S: SharedValueSource<Scalar>> MpcProver<'t, '
                 .chain(gens.G(n1))
                 .chain(gens.H(n1)),
         )
+        .open_and_authenticate()
+        .map_err(MultiproverError::Mpc)?
         .compress();
 
         // Add the commitments to the transcript, these are used to generate Fiat-Shamir challenges
         self.transcript.append_point(b"A_I1", &A_I1.value());
         self.transcript.append_point(b"A_O1", &A_O1.value());
-        self.transcript.append_point(b"S1", &A_S1.value());
+        self.transcript.append_point(b"S1", &S1.value());
 
         // Begin phase 2 of the commitments
         // In this phase, we have initialized the Fiat-Shamir transcript with the commitments
@@ -606,46 +618,53 @@ impl<'t, 'g, N: MpcNetwork + Send, S: SharedValueSource<Scalar>> MpcProver<'t, '
 
         // Commit to the second phase input, outputs, and blinding factors as above
         // If there are no second phase commitments, we can skip this and reutrn the identity
-        let (A_I2, A_O2, A_S2) = if has_2nd_phase_commitments {
+        let (A_I2, A_O2, S2) = if has_2nd_phase_commitments {
+            // Commit to the left and right inputs to the multiplication gates from phase 2
+            // This commitment has the form:
+            //      A_I = <a_L, G> + <a_R, H> + i_blinding * B_blinding
+            // where G and H are the vectors of generators for the curve group, and B_blinding
+            // is the blinding Pedersen generator.
+            let shared_A_I = AuthenticatedRistretto::multiscalar_mul(
+                iter::once(&i_blinding2)
+                    .chain(self.a_L.iter().skip(n1))
+                    .chain(self.a_R.iter().skip(n1)),
+                iter::once(B_blinding.clone())
+                    .chain(gens.G(n).skip(n1))
+                    .chain(gens.H(n).skip(n1)),
+            );
+            // Commit to the outputs of the multiplication gates from phase 2
+            // This commitment has the form
+            //      A_O = <a_O, G> + o_blinding * B_blinding
+            // where G is a vector of generators for the curve group, and B_blinding
+            // is the blinding Pedersen generator.
+            let shared_A_O = AuthenticatedRistretto::multiscalar_mul(
+                iter::once(&o_blinding2).chain(self.a_O.iter().skip(n1)),
+                iter::once(B_blinding.clone()).chain(gens.G(n).skip(n1)),
+            );
+            // Commit to the blinding factors used in the inner product proofs
+            // This commitment has the form
+            //    S = <s_L, G> + <s_R, H> + s_blinding * B_blinding
+            // where G, H, and B_blinding are generators as above. s_L and s_R are vectors of blinding
+            // factors used to hide a_L and a_R in the inner product proofs respectively.
+            let shared_S = AuthenticatedRistretto::multiscalar_mul(
+                iter::once(&s_blinding2)
+                    .chain(s_L2.iter())
+                    .chain(s_R2.iter()),
+                iter::once(B_blinding)
+                    .chain(gens.G(n).skip(n1))
+                    .chain(gens.H(n).skip(n1)),
+            );
+
+            // Batch open the values
+            let opened_values = AuthenticatedRistretto::batch_open_and_authenticate(&[
+                shared_A_I, shared_A_O, shared_S,
+            ])
+            .map_err(MultiproverError::Mpc)?;
+
             (
-                // Commit to the left and right inputs to the multiplication gates from phase 2
-                // This commitment has the form:
-                //      A_I = <a_L, G> + <a_R, H> + i_blinding * B_blinding
-                // where G and H are the vectors of generators for the curve group, and B_blinding
-                // is the blinding Pedersen generator.
-                AuthenticatedRistretto::multiscalar_mul(
-                    iter::once(&i_blinding2)
-                        .chain(self.a_L.iter().skip(n1))
-                        .chain(self.a_R.iter().skip(n1)),
-                    iter::once(B_blinding.clone())
-                        .chain(gens.G(n).skip(n1))
-                        .chain(gens.H(n).skip(n1)),
-                )
-                .compress(),
-                // Commit to the outputs of the multiplication gates from phase 2
-                // This commitment has the form
-                //      A_O = <a_O, G> + o_blinding * B_blinding
-                // where G is a vector of generators for the curve group, and B_blinding
-                // is the blinding Pedersen generator.
-                AuthenticatedRistretto::multiscalar_mul(
-                    iter::once(&o_blinding2).chain(self.a_O.iter().skip(n1)),
-                    iter::once(B_blinding.clone()).chain(gens.G(n).skip(n1)),
-                )
-                .compress(),
-                // Commit to the blinding factors used in the inner product proofs
-                // This commitment has the form
-                //    A_S = <s_L, G> + <s_R, H> + s_blinding * B_blinding
-                // where G, H, and B_blinding are generators as above. s_L and s_R are vectors of blinding
-                // factors used to hide a_L and a_R in the inner product proofs respectively.
-                AuthenticatedRistretto::multiscalar_mul(
-                    iter::once(&s_blinding2)
-                        .chain(s_L2.iter())
-                        .chain(s_R2.iter()),
-                    iter::once(B_blinding)
-                        .chain(gens.G(n).skip(n1))
-                        .chain(gens.H(n).skip(n1)),
-                )
-                .compress(),
+                opened_values[0].compress(),
+                opened_values[1].compress(),
+                opened_values[2].compress(),
             )
         } else {
             (
@@ -661,25 +680,14 @@ impl<'t, 'g, N: MpcNetwork + Send, S: SharedValueSource<Scalar>> MpcProver<'t, '
         // Add the commitments to the transcript
         self.transcript.append_point(b"A_I2", &A_I2.value());
         self.transcript.append_point(b"A_O2", &A_O2.value());
-        self.transcript.append_point(b"S2", &A_S2.value());
+        self.transcript.append_point(b"S2", &S2.value());
 
         // Compute the inner product challenges y and z
         // These challenges rely on the fact that if a vector v has inner product 0 with
         // a random challenge, it is overwhelmingly likely to be the zero vector.
         // Construct these challenge vectors from increasing powers of y and z.
-        // TODO: How to construct a secret sharing of these values?
-        let y = self
-            .transcript
-            .shared_challenge_scalar(b"y", self.mpc_fabric.clone())
-            .open_and_authenticate()
-            .map_err(MultiproverError::Mpc)?
-            .to_scalar();
-        let z = self
-            .transcript
-            .shared_challenge_scalar(b"z", self.mpc_fabric.clone())
-            .open_and_authenticate()
-            .map_err(MultiproverError::Mpc)?
-            .to_scalar();
+        let y = self.transcript.challenge_scalar(b"y");
+        let z = self.transcript.challenge_scalar(b"z");
 
         // The assignment matrices can be flattened by pre-multiplying with their challenge vector
         let (wL, wR, wO, wV) = self.flattened_constraints(&z);
@@ -738,21 +746,37 @@ impl<'t, 'g, N: MpcNetwork + Send, S: SharedValueSource<Scalar>> MpcProver<'t, '
         let t_blinding_factors = self.borrow_fabric().allocate_random_scalars_batch(5);
 
         // Commit to the coefficients of t_poly using the blinding factors
-        let T_1 = self
-            .pc_gens
-            .commit_shared(&t_poly.t1, &t_blinding_factors[0]);
-        let T_3 = self
-            .pc_gens
-            .commit_shared(&t_poly.t3, &t_blinding_factors[1]);
-        let T_4 = self
-            .pc_gens
-            .commit_shared(&t_poly.t4, &t_blinding_factors[2]);
-        let T_5 = self
-            .pc_gens
-            .commit_shared(&t_poly.t5, &t_blinding_factors[3]);
-        let T_6 = self
-            .pc_gens
-            .commit_shared(&t_poly.t6, &t_blinding_factors[4]);
+        // and batch their openings
+        let (T_1, T_3, T_4, T_5, T_6) = {
+            let t_1_shared = self
+                .pc_gens
+                .commit_shared(&t_poly.t1, &t_blinding_factors[0]);
+            let t_3_shared = self
+                .pc_gens
+                .commit_shared(&t_poly.t3, &t_blinding_factors[1]);
+            let t_4_shared = self
+                .pc_gens
+                .commit_shared(&t_poly.t4, &t_blinding_factors[2]);
+            let t_5_shared = self
+                .pc_gens
+                .commit_shared(&t_poly.t5, &t_blinding_factors[3]);
+            let t_6_shared = self
+                .pc_gens
+                .commit_shared(&t_poly.t6, &t_blinding_factors[5]);
+
+            let opened_values = AuthenticatedRistretto::batch_open_and_authenticate(&[
+                t_1_shared, t_3_shared, t_4_shared, t_5_shared, t_6_shared,
+            ])
+            .map_err(MultiproverError::Mpc)?;
+
+            (
+                opened_values[0].clone(),
+                opened_values[1].clone(),
+                opened_values[2].clone(),
+                opened_values[3].clone(),
+                opened_values[4].clone(),
+            )
+        };
 
         // Add the commitments to the transcript
         self.transcript
@@ -771,17 +795,9 @@ impl<'t, 'g, N: MpcNetwork + Send, S: SharedValueSource<Scalar>> MpcProver<'t, '
         //      commitments to the polynomials l(x) and r(x). The randomized component comes from the
         //      deferred constraints, evaluated above
         //    - `x` is used to construct the challenge point `X` for the inner product proof
-        let u = self
-            .transcript
-            .shared_challenge_scalar(b"u", self.mpc_fabric.clone())
-            .open_and_authenticate()
-            .map_err(MultiproverError::Mpc)?
-            .to_scalar();
-        let x = self
-            .transcript
-            .shared_challenge_scalar(b"x", self.mpc_fabric.clone())
-            .open_and_authenticate()
-            .map_err(MultiproverError::Mpc)?;
+        let u = self.transcript.challenge_scalar(b"u");
+        let x_scalar = self.transcript.challenge_scalar(b"x");
+        let x = self.borrow_fabric().allocate_public_scalar(x_scalar);
 
         // Because we do not commit to T_2 directly, we commit to its replacement blinding factor that
         // will satisfy the equality: https://doc-internal.dalek.rs/bulletproofs/notes/r1cs_proof/index.html#proving-that-t_2-is-correct
@@ -829,19 +845,28 @@ impl<'t, 'g, N: MpcNetwork + Send, S: SharedValueSource<Scalar>> MpcProver<'t, '
 
         let e_blinding = &x * (i_blinding + &x * (o_blinding + &x * s_blinding));
 
+        // Open the final set of transcript values
+        let (t_x_open, t_x_blinding_open, e_blinding_open) = {
+            let opened_values =
+                AuthenticatedScalar::batch_open_and_authenticate(&[t_x, t_x_blinding, e_blinding])
+                    .map_err(MultiproverError::Mpc)?;
+
+            (
+                opened_values[0].clone(),
+                opened_values[1].clone(),
+                opened_values[2].clone(),
+            )
+        };
+
         // Append values to transcript
-        self.transcript.append_scalar(b"t_x", &t_x.to_scalar());
+        self.transcript.append_scalar(b"t_x", &t_x_open.to_scalar());
         self.transcript
-            .append_scalar(b"t_x_blinding", &t_x_blinding.to_scalar());
+            .append_scalar(b"t_x_blinding", &t_x_blinding_open.to_scalar());
         self.transcript
-            .append_scalar(b"e_blinding", &e_blinding.to_scalar());
+            .append_scalar(b"e_blinding", &e_blinding_open.to_scalar());
 
         // Sample another challenge scalar, this time for the inner product proof
-        let w = self
-            .transcript
-            .shared_challenge_scalar(b"w", self.mpc_fabric.clone())
-            .open_and_authenticate()
-            .map_err(MultiproverError::Mpc)?;
+        let w = self.transcript.challenge_scalar(b"w");
         let Q = w * self.pc_gens.B;
 
         // Chain together the generators from the phase 1 proof and those generators multiplied by

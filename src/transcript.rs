@@ -3,12 +3,8 @@
 use curve25519_dalek::ristretto::CompressedRistretto;
 use curve25519_dalek::scalar::Scalar;
 use merlin::Transcript;
-use mpc_ristretto::authenticated_scalar::AuthenticatedScalar;
-use mpc_ristretto::beaver::SharedValueSource;
-use mpc_ristretto::network::MpcNetwork;
 
 use crate::errors::ProofError;
-use crate::r1cs_mpc::mpc_prover::SharedMpcFabric;
 
 pub trait TranscriptProtocol {
     /// Append a domain separator for an `n`-bit, `m`-party range proof.
@@ -42,19 +38,6 @@ pub trait TranscriptProtocol {
 
     /// Compute a `label`ed challenge variable.
     fn challenge_scalar(&mut self, label: &'static [u8]) -> Scalar;
-
-    /// Generate a secret shared challenge scalar. This method is called by
-    /// all parties participating in the proof generation. The effective
-    /// challenge is the sum of all the individual shares. This constitutes
-    /// a valid Fiat-Shamir challenge by the uniformity of a sum of uniforms.
-    fn shared_challenge_scalar<N, S>(
-        &mut self,
-        label: &'static [u8],
-        fabric: SharedMpcFabric<N, S>,
-    ) -> AuthenticatedScalar<N, S>
-    where
-        N: MpcNetwork + Send,
-        S: SharedValueSource<Scalar>;
 }
 
 impl TranscriptProtocol for Transcript {
@@ -109,25 +92,5 @@ impl TranscriptProtocol for Transcript {
         self.challenge_bytes(label, &mut buf);
 
         Scalar::from_bytes_mod_order_wide(&buf)
-    }
-
-    /// Generate a secret shared challenge scalar. This method is called by
-    /// all parties participating in the proof generation. The effective
-    /// challenge is the sum of all the individual shares. This constitutes
-    /// a valid Fiat-Shamir challenge by the uniformity of a sum of uniforms.
-    fn shared_challenge_scalar<N, S>(
-        &mut self,
-        label: &'static [u8],
-        fabric: SharedMpcFabric<N, S>,
-    ) -> AuthenticatedScalar<N, S>
-    where
-        N: MpcNetwork + Send,
-        S: SharedValueSource<Scalar>,
-    {
-        let challenge = self.challenge_scalar(label);
-        fabric
-            .as_ref()
-            .borrow_mut()
-            .allocate_preshared_scalar(challenge)
     }
 }
