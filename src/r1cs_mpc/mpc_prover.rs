@@ -7,6 +7,7 @@ use core::{
 use std::net::SocketAddr;
 
 use alloc::rc::Rc;
+use clear_on_drop::clear::Clear;
 use curve25519_dalek::{ristretto::CompressedRistretto, scalar::Scalar, traits::Identity};
 use merlin::Transcript;
 use mpc_ristretto::{
@@ -31,6 +32,7 @@ use crate::{
 
 use super::{
     authenticated_poly::{AuthenticatedPoly6, AuthenticatedVecPoly3},
+    mpc_inner_product::SharedInnerProductProof,
     proof::SharedR1CSProof,
 };
 
@@ -456,7 +458,7 @@ impl<'t, 'g, N: MpcNetwork + Send, S: SharedValueSource<Scalar>> MpcProver<'t, '
     /// as they derive Fiat-Shamir challenges from these transcripts. This is simpler
     /// than deriving the challenges in secret sharing space as we would have to hash
     /// within the MPC circuit, and implement a hasher on top of the authenticated field.
-    #[allow(non_snake_case, unused_variables, unused_mut)]
+    #[allow(non_snake_case)]
     pub fn prove(
         mut self,
         bp_gens: &BulletproofGens,
@@ -466,31 +468,6 @@ impl<'t, 'g, N: MpcNetwork + Send, S: SharedValueSource<Scalar>> MpcProver<'t, '
         // but this suffix provides safe disambiguation because each variable
         // is prefixed with a separate label.
         self.transcript.append_u64(b"m", self.v.len() as u64);
-
-        // Create a `TranscriptRng` from the high-level witness data
-        //
-        // The prover wants to rekey the RNG with its witness data.
-        //
-        // This consists of the high level witness data (the v's and
-        // v_blinding's), as well as the low-level witness data (a_L,
-        // a_R, a_O).  Since the low-level data should (hopefully) be
-        // determined by the high-level data, it doesn't give any
-        // extra entropy for reseeding the RNG.
-        //
-        // Since the v_blindings should be random scalars (in order to
-        // protect the v's in the commitments), we don't gain much by
-        // committing the v's as well as the v_blinding's.
-        let mut rng = {
-            let mut builder = self.transcript.build_rng();
-
-            // Commit the blinding factors for the input wires
-            for v_b in &self.v_blinding {
-                builder = builder.rekey_with_witness_bytes(b"v_blinding", v_b.as_bytes());
-            }
-
-            use rand::thread_rng;
-            builder.finalize(&mut thread_rng())
-        };
 
         // Commit to the low-level witness data, a_l, a_r, a_o in the multiplication
         // gates.
@@ -770,25 +747,20 @@ impl<'t, 'g, N: MpcNetwork + Send, S: SharedValueSource<Scalar>> MpcProver<'t, '
             .map_err(MultiproverError::Mpc)?;
 
             (
-                opened_values[0].clone(),
-                opened_values[1].clone(),
-                opened_values[2].clone(),
-                opened_values[3].clone(),
-                opened_values[4].clone(),
+                opened_values[0].compress(),
+                opened_values[1].compress(),
+                opened_values[2].compress(),
+                opened_values[3].compress(),
+                opened_values[4].compress(),
             )
         };
 
         // Add the commitments to the transcript
-        self.transcript
-            .append_point(b"T_1", &T_1.to_ristretto().compress());
-        self.transcript
-            .append_point(b"T_3", &T_3.to_ristretto().compress());
-        self.transcript
-            .append_point(b"T_4", &T_4.to_ristretto().compress());
-        self.transcript
-            .append_point(b"T_5", &T_5.to_ristretto().compress());
-        self.transcript
-            .append_point(b"T_6", &T_6.to_ristretto().compress());
+        self.transcript.append_point(b"T_1", &T_1.value());
+        self.transcript.append_point(b"T_3", &T_3.value());
+        self.transcript.append_point(b"T_4", &T_4.value());
+        self.transcript.append_point(b"T_5", &T_5.value());
+        self.transcript.append_point(b"T_6", &T_6.value());
 
         // Sample two more challenge scalars:
         //    - `u` is used to create a random linear combination of the non-randomized and randomized
@@ -847,9 +819,12 @@ impl<'t, 'g, N: MpcNetwork + Send, S: SharedValueSource<Scalar>> MpcProver<'t, '
 
         // Open the final set of transcript values
         let (t_x_open, t_x_blinding_open, e_blinding_open) = {
-            let opened_values =
-                AuthenticatedScalar::batch_open_and_authenticate(&[t_x, t_x_blinding, e_blinding])
-                    .map_err(MultiproverError::Mpc)?;
+            let opened_values = AuthenticatedScalar::batch_open_and_authenticate(&[
+                t_x.clone(),
+                t_x_blinding.clone(),
+                e_blinding.clone(),
+            ])
+            .map_err(MultiproverError::Mpc)?;
 
             (
                 opened_values[0].clone(),
@@ -884,8 +859,44 @@ impl<'t, 'g, N: MpcNetwork + Send, S: SharedValueSource<Scalar>> MpcProver<'t, '
             .collect::<Vec<_>>();
 
         // Finally, build the inner product proof for the R1CS relation
-        // TODO: IPP
+        let ipp = SharedInnerProductProof::create(
+            self.transcript,
+            &Q,
+            &G_factors,
+            &H_factors,
+            gens.G(padded_n).collect(),
+            gens.H(padded_n).collect(),
+            l_vec,
+            r_vec,
+            self.mpc_fabric.clone(),
+        );
 
-        Err(MultiproverError::NotImplemented)
+        // Clear all the allocated values after proof is completed
+        for mut scalar in s_L1
+            .iter_mut()
+            .chain(s_L2.iter_mut())
+            .chain(s_R1.iter_mut())
+            .chain(s_R2.iter_mut())
+        {
+            scalar.clear();
+        }
+
+        Ok(SharedR1CSProof {
+            A_I1,
+            A_O1,
+            S1,
+            A_I2,
+            A_O2,
+            S2,
+            T_1,
+            T_3,
+            T_4,
+            T_5,
+            T_6,
+            t_x,
+            t_x_blinding,
+            e_blinding,
+            ipp_proof: ipp,
+        })
     }
 }

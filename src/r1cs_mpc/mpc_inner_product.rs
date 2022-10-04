@@ -253,6 +253,21 @@ impl<N: MpcNetwork + Send, S: SharedValueSource<Scalar>> SharedInnerProductProof
         buf.extend_from_slice(self.b.as_bytes());
         buf
     }
+
+    /// Converts the proof into a byte iterator over serialized view of the proof.
+    /// The layout of the inner product proof is:
+    /// * \\(n\\) pairs of compressed Ristretto points \\(L_0, R_0 \dots, L_{n-1}, R_{n-1}\\),
+    /// * two scalars \\(a, b\\).
+    #[inline]
+    pub(crate) fn to_bytes_iter(&self) -> impl Iterator<Item = u8> + '_ {
+        self.L_vec
+            .iter()
+            .zip(self.R_vec.iter())
+            .flat_map(|(l, r)| l.as_bytes().iter().chain(r.as_bytes()))
+            .chain(self.a.as_bytes())
+            .chain(self.b.as_bytes())
+            .copied()
+    }
 }
 
 /// Computes an inner product of two vectors

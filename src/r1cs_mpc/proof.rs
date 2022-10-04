@@ -8,7 +8,7 @@ use mpc_ristretto::authenticated_scalar::AuthenticatedScalar;
 use mpc_ristretto::beaver::SharedValueSource;
 use mpc_ristretto::network::MpcNetwork;
 
-use crate::inner_product_proof::InnerProductProof;
+use super::mpc_inner_product::SharedInnerProductProof;
 
 const ONE_PHASE_COMMITMENTS: u8 = 0;
 const TWO_PHASE_COMMITMENTS: u8 = 1;
@@ -62,8 +62,7 @@ pub struct SharedR1CSProof<N: MpcNetwork + Send, S: SharedValueSource<Scalar>> {
     /// inner-product arguments
     pub(super) e_blinding: AuthenticatedScalar<N, S>,
     /// Proof data for the inner-product argument.
-    /// TODO: Make this a shared inner product proof
-    pub(super) ipp_proof: InnerProductProof,
+    pub(super) ipp_proof: SharedInnerProductProof<N, S>,
 }
 
 impl<N: MpcNetwork + Send, S: SharedValueSource<Scalar>> SharedR1CSProof<N, S> {
