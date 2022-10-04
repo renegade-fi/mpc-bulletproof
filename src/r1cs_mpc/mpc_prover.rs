@@ -867,7 +867,9 @@ impl<'t, 'g, N: MpcNetwork + Send, S: SharedValueSource<Scalar>> MpcProver<'t, '
 
         // Sample another challenge scalar, this time for the inner product proof
         let w = self.transcript.challenge_scalar(b"w");
-        let Q = w * self.pc_gens.B;
+        let Q = self
+            .borrow_fabric()
+            .allocate_public_ristretto_point(w * self.pc_gens.B);
 
         // Chain together the generators from the phase 1 proof and those generators multiplied by
         // `u`; which represent the generators for the phase 2 proof
