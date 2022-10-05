@@ -869,7 +869,7 @@ impl<'t, 'g, N: MpcNetwork + Send, S: SharedValueSource<Scalar>> MpcProver<'t, '
             l_vec,
             r_vec,
             self.mpc_fabric.clone(),
-        );
+        )?;
 
         // Clear all the allocated values after proof is completed
         for mut scalar in s_L1

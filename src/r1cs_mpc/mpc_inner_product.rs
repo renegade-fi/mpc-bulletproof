@@ -20,6 +20,8 @@ use merlin::Transcript;
 
 use super::mpc_prover::SharedMpcFabric;
 
+use crate::errors::MultiproverError;
+use crate::inner_product_proof::InnerProductProof;
 use crate::transcript::TranscriptProtocol;
 
 /// An inner product proof that is secret shared between multiple proving parties.
@@ -28,8 +30,11 @@ use crate::transcript::TranscriptProtocol;
 /// via the standard Bulletproof verifier defined in the parent module.
 #[derive(Clone, Debug)]
 pub struct SharedInnerProductProof<N: MpcNetwork + Send, S: SharedValueSource<Scalar>> {
-    pub(crate) L_vec: Vec<AuthenticatedCompressedRistretto<N, S>>,
-    pub(crate) R_vec: Vec<AuthenticatedCompressedRistretto<N, S>>,
+    pub(crate) L_vec: Vec<AuthenticatedRistretto<N, S>>,
+    pub(crate) R_vec: Vec<AuthenticatedRistretto<N, S>>,
+    /// Convenience values used for serialization
+    pub(crate) L_compressed: Vec<AuthenticatedCompressedRistretto<N, S>>,
+    pub(crate) R_compressed: Vec<AuthenticatedCompressedRistretto<N, S>>,
     pub(crate) a: AuthenticatedScalar<N, S>,
     pub(crate) b: AuthenticatedScalar<N, S>,
 }
@@ -53,7 +58,7 @@ impl<N: MpcNetwork + Send, S: SharedValueSource<Scalar>> SharedInnerProductProof
         mut a_vec: Vec<AuthenticatedScalar<N, S>>,
         mut b_vec: Vec<AuthenticatedScalar<N, S>>,
         fabric: SharedMpcFabric<N, S>,
-    ) -> SharedInnerProductProof<N, S> {
+    ) -> Result<SharedInnerProductProof<N, S>, MultiproverError> {
         // Create slices G, H, a, b backed by their respective
         // vectors.  This lets us reslice as we compress the lengths
         // of the vectors in the main loop below.
@@ -80,6 +85,8 @@ impl<N: MpcNetwork + Send, S: SharedValueSource<Scalar>> SharedInnerProductProof
         let lg_n = n.next_power_of_two().trailing_zeros() as usize;
         let mut L_vec = Vec::with_capacity(lg_n);
         let mut R_vec = Vec::with_capacity(lg_n);
+        let mut L_vec_compressed = Vec::with_capacity(lg_n);
+        let mut R_vec_compressed = Vec::with_capacity(lg_n);
 
         // If it's the first iteration, unroll the Hprime = H*y_inv scalar mults
         // into multiscalar muls, for performance.
@@ -104,8 +111,7 @@ impl<N: MpcNetwork + Send, S: SharedValueSource<Scalar>> SharedInnerProductProof
                     )
                     .chain(iter::once(c_L)),
                 G_R.iter().chain(H_L.iter()).chain(iter::once(Q)),
-            )
-            .compress();
+            );
 
             let R = AuthenticatedRistretto::multiscalar_mul(
                 a_R.iter()
@@ -118,14 +124,28 @@ impl<N: MpcNetwork + Send, S: SharedValueSource<Scalar>> SharedInnerProductProof
                     )
                     .chain(iter::once(c_R)),
                 G_L.iter().chain(H_R.iter()).chain(iter::once(Q)),
-            )
-            .compress();
+            );
 
-            transcript.append_point(b"L", &L.value());
-            transcript.append_point(b"R", &R.value());
+            // Open the values before adding to the transcript
+            // Otherwise, the parties will have inconsistent views of the transcript and
+            // generate invalid secret shares of the challenge values
+            let (L_open, R_open) = {
+                let mut opened_values =
+                    AuthenticatedRistretto::batch_open_and_authenticate(&[L, R])
+                        .map_err(MultiproverError::Mpc)?;
+                (opened_values.remove(0), opened_values.remove(0))
+            };
 
-            L_vec.push(L);
-            R_vec.push(R);
+            let L_compressed = L_open.compress();
+            let R_compressed = R_open.compress();
+
+            transcript.append_point(b"L", &L_compressed.value());
+            transcript.append_point(b"R", &R_compressed.value());
+
+            L_vec.push(L_open);
+            R_vec.push(R_open);
+            L_vec_compressed.push(L_compressed);
+            R_vec_compressed.push(R_compressed);
 
             let u = transcript.challenge_scalar(b"u");
             let u_inv = u.invert();
@@ -174,20 +194,33 @@ impl<N: MpcNetwork + Send, S: SharedValueSource<Scalar>> SharedInnerProductProof
             let L = AuthenticatedRistretto::multiscalar_mul(
                 a_L.iter().chain(b_R.iter()).chain(iter::once(&c_L)),
                 G_R.iter().chain(H_L.iter()).chain(iter::once(Q)),
-            )
-            .compress();
+            );
 
             let R = AuthenticatedRistretto::multiscalar_mul(
                 a_R.iter().chain(b_L.iter()).chain(iter::once(&c_R)),
                 G_L.iter().chain(H_R.iter()).chain(iter::once(Q)),
-            )
-            .compress();
+            );
 
-            transcript.append_point(b"L", &L.value());
-            transcript.append_point(b"R", &R.value());
+            // Open the values before adding to the transcript
+            // Otherwise, the parties will have inconsistent views of the transcript and
+            // generate invalid secret shares of the challenge values
+            let (L_open, R_open) = {
+                let mut opened_values =
+                    AuthenticatedRistretto::batch_open_and_authenticate(&[L, R])
+                        .map_err(MultiproverError::Mpc)?;
+                (opened_values.remove(0), opened_values.remove(0))
+            };
 
-            L_vec.push(L);
-            R_vec.push(R);
+            let L_compressed = L_open.compress();
+            let R_compressed = R_open.compress();
+
+            transcript.append_point(b"L", &L_compressed.value());
+            transcript.append_point(b"R", &R_compressed.value());
+
+            L_vec.push(L_open);
+            R_vec.push(R_open);
+            L_vec_compressed.push(L_compressed);
+            R_vec_compressed.push(R_compressed);
 
             let u = transcript.challenge_scalar(b"u");
             let u_inv = u.invert();
@@ -221,12 +254,14 @@ impl<N: MpcNetwork + Send, S: SharedValueSource<Scalar>> SharedInnerProductProof
             H = H_L;
         }
 
-        SharedInnerProductProof {
+        Ok(SharedInnerProductProof {
             L_vec,
             R_vec,
+            L_compressed: L_vec_compressed,
+            R_compressed: R_vec_compressed,
             a: a[0].clone(),
             b: b[0].clone(),
-        }
+        })
     }
 
     /// Returns the size in bytes required to serialize the inner
@@ -246,8 +281,8 @@ impl<N: MpcNetwork + Send, S: SharedValueSource<Scalar>> SharedInnerProductProof
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut buf = Vec::with_capacity(self.serialized_size());
         for (l, r) in self.L_vec.iter().zip(self.R_vec.iter()) {
-            buf.extend_from_slice(l.as_bytes());
-            buf.extend_from_slice(r.as_bytes());
+            buf.extend_from_slice(l.compress().as_bytes());
+            buf.extend_from_slice(r.compress().as_bytes());
         }
         buf.extend_from_slice(self.a.as_bytes());
         buf.extend_from_slice(self.b.as_bytes());
@@ -260,13 +295,43 @@ impl<N: MpcNetwork + Send, S: SharedValueSource<Scalar>> SharedInnerProductProof
     /// * two scalars \\(a, b\\).
     #[inline]
     pub(crate) fn to_bytes_iter(&self) -> impl Iterator<Item = u8> + '_ {
-        self.L_vec
+        self.L_compressed
             .iter()
-            .zip(self.R_vec.iter())
+            .zip(self.R_compressed.iter())
             .flat_map(|(l, r)| l.as_bytes().iter().chain(r.as_bytes()))
             .chain(self.a.as_bytes())
             .chain(self.b.as_bytes())
             .copied()
+    }
+
+    /// Opens a shared proof
+    ///
+    /// Each party shares the values in their proof elements and computes the cleartext values from
+    /// the set of additive shares
+    ///
+    /// The resulting type is `InnerProductProof` as the values are no longer secret shared
+    pub fn open(&self) -> Result<InnerProductProof, MultiproverError> {
+        // Open the scalars (a, b)
+        // The Ristretto points are already opened as a result of running the protocol
+        let opened_scalars =
+            AuthenticatedScalar::batch_open_and_authenticate(&[self.a.clone(), self.b.clone()])
+                .map_err(MultiproverError::Mpc)?;
+        let (a_open, b_open) = (opened_scalars[0].to_scalar(), opened_scalars[1].to_scalar());
+
+        Ok(InnerProductProof {
+            L_vec: self
+                .L_vec
+                .iter()
+                .map(|point| point.to_ristretto().compress())
+                .collect(),
+            R_vec: self
+                .R_vec
+                .iter()
+                .map(|point| point.to_ristretto().compress())
+                .collect(),
+            a: a_open,
+            b: b_open,
+        })
     }
 }
 
