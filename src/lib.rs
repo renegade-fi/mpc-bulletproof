@@ -1,7 +1,7 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 #![doc = include_str!("../README.md")]
 #![feature(try_trait_v2)]
-#![deny(missing_docs)]
+// #![deny(missing_docs)]
 #![doc(html_logo_url = "https://doc.dalek.rs/assets/dalek-logo-clear.png")]
 #![doc(html_root_url = "https://docs.rs/bulletproofs/2.0.0")]
 
@@ -10,7 +10,12 @@ extern crate alloc;
 #[macro_use]
 extern crate serde_derive;
 
+// Publically export utils for testing, but not otherwise
+#[cfg(not(feature = "integration_test"))]
 mod util;
+#[allow(missing_docs)]
+#[cfg(feature = "integration_test")]
+pub mod util;
 
 #[doc = include_str!("../docs/notes-intro.md")]
 mod notes {

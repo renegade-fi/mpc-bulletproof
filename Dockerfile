@@ -33,6 +33,7 @@ COPY README.md .
 COPY src ./src
 COPY integration ./integration
 
-RUN cargo build --test integration
+RUN cargo build --test integration \
+    --features integration_test
 
 CMD [ "cargo", "test" ]

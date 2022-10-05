@@ -1,5 +1,9 @@
 //! Integration test harness, largely borrowed from:
 //!     https://github.com/renegade-fi/MPC-Ristretto
+#![cfg(feature = "integration_test")]
+
+mod mpc_inner_product;
+
 use std::{borrow::Borrow, cell::RefCell, net::SocketAddr, process::exit, rc::Rc};
 
 use clap::Parser;
@@ -8,19 +12,15 @@ use curve25519_dalek::scalar::Scalar;
 use dns_lookup::lookup_host;
 
 use mpc_ristretto::beaver::SharedValueSource;
-use mpc_ristretto::{
-    mpc_scalar::MpcScalar,
-    network::{MpcNetwork, QuicTwoPartyNet},
-};
+use mpc_ristretto::fabric::AuthenticatedMpcFabric;
+use mpc_ristretto::network::{MpcNetwork, QuicTwoPartyNet};
 
 /// Integration test arguments, common to all tests
 #[derive(Clone, Debug)]
 #[allow(dead_code)]
 struct IntegrationTestArgs {
     party_id: u64,
-    net_ref: Rc<RefCell<QuicTwoPartyNet>>,
-    beaver_source: Rc<RefCell<PartyIDBeaverSource>>,
-    mac_key: MpcScalar<QuicTwoPartyNet, PartyIDBeaverSource>,
+    mpc_fabric: Rc<RefCell<AuthenticatedMpcFabric<QuicTwoPartyNet, PartyIDBeaverSource>>>,
 }
 
 /// Integration test format
@@ -128,9 +128,11 @@ async fn main() {
     let net_ref = Rc::new(RefCell::new(net));
     let beaver_source = Rc::new(RefCell::new(PartyIDBeaverSource::new(args.party)));
 
-    let mac_key = MpcScalar::from_private_u64(15, net_ref.clone(), beaver_source.clone())
-        .share_secret(0 /* party_id */)
-        .unwrap();
+    let mpc_fabric = Rc::new(RefCell::new(AuthenticatedMpcFabric::new_with_network(
+        args.party,
+        net_ref.clone(),
+        beaver_source,
+    )));
 
     /**
      * Test harness
@@ -141,9 +143,7 @@ async fn main() {
 
     let test_args = IntegrationTestArgs {
         party_id: args.party,
-        net_ref,
-        beaver_source,
-        mac_key,
+        mpc_fabric,
     };
 
     let mut all_success = true;
@@ -162,14 +162,7 @@ async fn main() {
 
     // Close the network
     #[allow(clippy::await_holding_refcell_ref, unused_must_use)]
-    if test_args
-        .net_ref
-        .as_ref()
-        .borrow_mut()
-        .close()
-        .await
-        .is_err()
-    {
+    if net_ref.as_ref().borrow_mut().close().await.is_err() {
         println!("Error tearing down connection");
     }
 
