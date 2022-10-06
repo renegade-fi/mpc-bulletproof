@@ -35,8 +35,15 @@ pub struct SharedInnerProductProof<N: MpcNetwork + Send, S: SharedValueSource<Sc
     /// Convenience values used for serialization
     pub(crate) L_compressed: Vec<AuthenticatedCompressedRistretto<N, S>>,
     pub(crate) R_compressed: Vec<AuthenticatedCompressedRistretto<N, S>>,
+    /// Only expose `a` and `b` for integration tests, testing malleability
+    #[cfg(not(feature = "integration_test"))]
     pub(crate) a: AuthenticatedScalar<N, S>,
+    #[cfg(feature = "integration_test")]
+    pub a: AuthenticatedScalar<N, S>,
+    #[cfg(not(feature = "integration_test"))]
     pub(crate) b: AuthenticatedScalar<N, S>,
+    #[cfg(feature = "integration_test")]
+    pub b: AuthenticatedScalar<N, S>,
 }
 
 #[allow(clippy::too_many_arguments)]

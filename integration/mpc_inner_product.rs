@@ -99,6 +99,64 @@ where
 }
 
 #[allow(non_snake_case)]
+fn prove<N, S>(
+    a: &[AuthenticatedScalar<N, S>],
+    b: &[AuthenticatedScalar<N, S>],
+    y_inv: Scalar,
+    fabric: SharedMpcFabric<N, S>,
+) -> Result<SharedInnerProductProof<N, S>, String>
+where
+    N: MpcNetwork + Send,
+    S: SharedValueSource<Scalar>,
+{
+    assert_eq!(a.len(), b.len());
+    let n = a.len();
+    assert!(n.is_power_of_two());
+
+    // Create a reusable borrow
+    let borrowed_fabric = fabric.as_ref().borrow();
+
+    // Create the generators for the proof
+    let bp_gens = BulletproofGens::new(n, 1);
+    let G: Vec<AuthenticatedRistretto<_, _>> = bp_gens
+        .share(0)
+        .G(n)
+        .cloned()
+        .map(|value| borrowed_fabric.allocate_public_ristretto_point(value))
+        .collect();
+    let H: Vec<AuthenticatedRistretto<_, _>> = bp_gens
+        .share(0)
+        .H(n)
+        .cloned()
+        .map(|value| borrowed_fabric.allocate_public_ristretto_point(value))
+        .collect();
+
+    // Create multipliers for the generators
+    let G_factors: Vec<Scalar> = iter::repeat(Scalar::one()).take(n).collect();
+    let H_factors: Vec<Scalar> = util::exp_iter(y_inv).take(n).collect();
+
+    // Q is the generator used to commit to the inner product result `c`
+    let Q = borrowed_fabric.allocate_public_ristretto_point(RistrettoPoint::hash_from_bytes::<
+        Sha3_512,
+    >(TEST_PHRASE.as_bytes()));
+
+    // Generate the inner product proof
+    let mut transcript = Transcript::new(TRANSCRIPT_SEED.as_bytes());
+    SharedInnerProductProof::create(
+        &mut transcript,
+        &Q,
+        &G_factors,
+        &H_factors,
+        G,
+        H,
+        a.to_vec(),
+        b.to_vec(),
+        fabric.clone(),
+    )
+    .map_err(|err| format!("Error proving: {:?}", err))
+}
+
+#[allow(non_snake_case)]
 fn prove_and_verify<N, S>(
     a: &[AuthenticatedScalar<N, S>],
     b: &[AuthenticatedScalar<N, S>],
@@ -285,6 +343,51 @@ fn test_interleaved_inner_product(test_args: &IntegrationTestArgs) -> Result<(),
     prove_and_verify(&a, &b, &c, y_inv, test_args.mpc_fabric.clone())
 }
 
+/// Tests that opening a modified proof fails authentication
+fn test_malleable_proof(test_args: &IntegrationTestArgs) -> Result<(), String> {
+    // Party 0 holds the first vector, party 1 holds the second
+    // Expected inner product is 920
+    let my_values = if test_args.party_id == 0 {
+        vec![13, 42]
+    } else {
+        vec![5, 0]
+    };
+
+    // Share the values with the peer
+    let borrowed_fabric = test_args.mpc_fabric.as_ref().borrow();
+    let shared_a: Vec<AuthenticatedScalar<_, _>> = my_values
+        .iter()
+        .map(|value| {
+            borrowed_fabric.allocate_private_u64(0 /* party_id */, *value)
+        })
+        .collect::<Result<Vec<_>, MpcError>>()
+        .map_err(|err| format!("Error sharing a values: {:?}", err))?;
+
+    let shared_b: Vec<AuthenticatedScalar<_, _>> = my_values
+        .iter()
+        .map(|value| {
+            borrowed_fabric.allocate_private_u64(1 /* party_id */, *value)
+        })
+        .collect::<Result<Vec<_>, MpcError>>()
+        .map_err(|err| format!("Error sharing b values: {:?}", err))?;
+    let y_inv = generate_challenge_scalar(0 /* party_id */, test_args.mpc_fabric.clone())?;
+
+    // Create a proof
+    let mut proof = prove(&shared_a, &shared_b, y_inv, test_args.mpc_fabric.clone())?;
+
+    // Party 0 tries to modify the proof
+    if test_args.party_id == 0 {
+        proof.a += Scalar::from(2u64);
+    }
+
+    // Open and ensure that authentication fails
+    proof.open().map_or(Ok(()), |_| {
+        Err("Expected authentication failure, authentication passed...")
+    })?;
+
+    Ok(())
+}
+
 // Take inventory
 inventory::submit!(IntegrationTest {
     name: "mpc-inner-product::test_simple_inner_product",
@@ -294,4 +397,9 @@ inventory::submit!(IntegrationTest {
 inventory::submit!(IntegrationTest {
     name: "mpc-inner-product::test_interleaved_inner_product",
     test_fn: test_interleaved_inner_product,
+});
+
+inventory::submit!(IntegrationTest {
+    name: "mpc-inner-product::test_malleable_proof",
+    test_fn: test_malleable_proof,
 });
