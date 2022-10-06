@@ -15,7 +15,9 @@ use mpc_ristretto::beaver::SharedValueSource;
 use mpc_ristretto::fabric::AuthenticatedMpcFabric;
 use mpc_ristretto::network::{MpcNetwork, QuicTwoPartyNet};
 
-type SharedMpcFabric = Rc<RefCell<AuthenticatedMpcFabric<QuicTwoPartyNet, PartyIDBeaverSource>>>;
+#[allow(type_alias_bounds)]
+type SharedMpcFabric<N: MpcNetwork + Send, S: SharedValueSource<Scalar>> =
+    Rc<RefCell<AuthenticatedMpcFabric<N, S>>>;
 
 /// Integration test arguments, common to all tests
 #[derive(Clone, Debug)]

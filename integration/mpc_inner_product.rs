@@ -7,7 +7,7 @@ use curve25519_dalek::{ristretto::RistrettoPoint, scalar::Scalar};
 use merlin::Transcript;
 use mpc_ristretto::{
     authenticated_ristretto::AuthenticatedRistretto, authenticated_scalar::AuthenticatedScalar,
-    error::MpcError,
+    beaver::SharedValueSource, error::MpcError, network::MpcNetwork,
 };
 use rand_core::OsRng;
 use sha3::Sha3_512;
@@ -15,12 +15,25 @@ use sha3::Sha3_512;
 use crate::{IntegrationTest, IntegrationTestArgs, SharedMpcFabric};
 
 /**
+ * Constants
+ */
+const TEST_PHRASE: &str = "test point";
+const TRANSCRIPT_SEED: &str = "test_inner_product";
+
+/**
  * Utils
  */
 
 /// Generates a random challenge scalar originating from the given party, and shares
 /// it with the peer
-fn generate_challenge_scalar(party_id: u64, fabric: SharedMpcFabric) -> Result<Scalar, String> {
+fn generate_challenge_scalar<N, S>(
+    party_id: u64,
+    fabric: SharedMpcFabric<N, S>,
+) -> Result<Scalar, String>
+where
+    N: MpcNetwork + Send,
+    S: SharedValueSource<Scalar>,
+{
     let mut rng = OsRng {};
     let random_scalar = Scalar::random(&mut rng);
 
@@ -34,16 +47,26 @@ fn generate_challenge_scalar(party_id: u64, fabric: SharedMpcFabric) -> Result<S
         .map(|value| value.to_scalar())
 }
 
-/**
- * Tests
- */
-
-/// Tests that a simple inner product argument proves correctly
 #[allow(non_snake_case)]
-fn test_simple_inner_product(test_args: &IntegrationTestArgs) -> Result<(), String> {
-    let n = 2;
-    let borrowed_fabric = test_args.mpc_fabric.as_ref().borrow();
+fn create_input_commitment<N, S>(
+    a: &[AuthenticatedScalar<N, S>],
+    b: &[AuthenticatedScalar<N, S>],
+    c: &AuthenticatedScalar<N, S>,
+    y_inv: Scalar,
+    fabric: SharedMpcFabric<N, S>,
+) -> AuthenticatedRistretto<N, S>
+where
+    N: MpcNetwork + Send,
+    S: SharedValueSource<Scalar>,
+{
+    assert_eq!(a.len(), b.len());
+    let n = a.len();
+    assert!(n.is_power_of_two());
 
+    // Create a reusable borrow of the MPC fabric
+    let borrowed_fabric = fabric.as_ref().borrow();
+
+    // Build generators for the commitment
     let bp_gens = BulletproofGens::new(n, 1);
     let G: Vec<AuthenticatedRistretto<_, _>> = bp_gens
         .share(0)
@@ -58,53 +81,71 @@ fn test_simple_inner_product(test_args: &IntegrationTestArgs) -> Result<(), Stri
         .map(|value| borrowed_fabric.allocate_public_ristretto_point(value))
         .collect();
 
-    let G_factors: Vec<Scalar> = iter::repeat(Scalar::one()).take(n).collect();
-
-    let y_inv = generate_challenge_scalar(0 /* party_id */, test_args.mpc_fabric.clone())?;
-    let H_factors: Vec<Scalar> = util::exp_iter(y_inv).take(n).collect();
-
-    // Q would be determined upstream in the protocol, so we pick a random one.
+    // Q is the generator used for `c`
     let Q = borrowed_fabric.allocate_public_ristretto_point(RistrettoPoint::hash_from_bytes::<
         Sha3_512,
-    >(b"test point"));
+    >(TEST_PHRASE.as_bytes()));
 
-    // Party 0 holds the first vector, party 1 holds the second
-    // Expected inner product is 920
-    let my_values = if test_args.party_id == 0 {
-        vec![13, 42]
-    } else {
-        vec![5, 0]
-    };
-    let expected_inner_product = 65u64;
+    // Pre-multiply b by iterated powers of y_inv
+    let b_prime = b.iter().zip(util::exp_iter(y_inv)).map(|(bi, yi)| bi * yi);
 
-    let shared_a: Vec<AuthenticatedScalar<_, _>> = my_values
-        .iter()
-        .map(|value| {
-            borrowed_fabric.allocate_private_u64(0 /* party_id */, *value)
-        })
-        .collect::<Result<Vec<_>, MpcError>>()
-        .map_err(|err| format!("Error sharing a values: {:?}", err))?;
-
-    let shared_b: Vec<AuthenticatedScalar<_, _>> = my_values
-        .iter()
-        .map(|value| {
-            borrowed_fabric.allocate_private_u64(1 /* party_id */, *value)
-        })
-        .collect::<Result<Vec<_>, MpcError>>()
-        .map_err(|err| format!("Error sharing b values: {:?}", err))?;
-    let c: AuthenticatedScalar<_, _> = borrowed_fabric.allocate_public_u64(expected_inner_product);
-
-    let b_prime = shared_b
-        .iter()
-        .zip(util::exp_iter(y_inv))
-        .map(|(bi, yi)| bi * yi);
-
-    let P = AuthenticatedRistretto::multiscalar_mul(
-        shared_a.iter().cloned().chain(b_prime).chain(iter::once(c)),
+    AuthenticatedRistretto::multiscalar_mul(
+        a.iter()
+            .cloned()
+            .chain(b_prime)
+            .chain(iter::once(c.clone())),
         G.iter().chain(H.iter()).chain(iter::once(&Q)),
-    );
+    )
+}
 
-    let mut transcript = Transcript::new(b"test_simple_inner_product");
+#[allow(non_snake_case)]
+fn prove_and_verify<N, S>(
+    a: &[AuthenticatedScalar<N, S>],
+    b: &[AuthenticatedScalar<N, S>],
+    c: &AuthenticatedScalar<N, S>,
+    y_inv: Scalar,
+    fabric: SharedMpcFabric<N, S>,
+) -> Result<(), String>
+where
+    N: MpcNetwork + Send,
+    S: SharedValueSource<Scalar>,
+{
+    assert_eq!(a.len(), b.len());
+    let n = a.len();
+    assert!(n.is_power_of_two());
+
+    // Create a commitment to the input
+    let P = create_input_commitment(a, b, c, y_inv, fabric.clone());
+
+    // Create a reusable borrow
+    let borrowed_fabric = fabric.as_ref().borrow();
+
+    // Create the generators for the proof
+    let bp_gens = BulletproofGens::new(n, 1);
+    let G: Vec<AuthenticatedRistretto<_, _>> = bp_gens
+        .share(0)
+        .G(n)
+        .cloned()
+        .map(|value| borrowed_fabric.allocate_public_ristretto_point(value))
+        .collect();
+    let H: Vec<AuthenticatedRistretto<_, _>> = bp_gens
+        .share(0)
+        .H(n)
+        .cloned()
+        .map(|value| borrowed_fabric.allocate_public_ristretto_point(value))
+        .collect();
+
+    // Create multipliers for the generators
+    let G_factors: Vec<Scalar> = iter::repeat(Scalar::one()).take(n).collect();
+    let H_factors: Vec<Scalar> = util::exp_iter(y_inv).take(n).collect();
+
+    // Q is the generator used to commit to the inner product result `c`
+    let Q = borrowed_fabric.allocate_public_ristretto_point(RistrettoPoint::hash_from_bytes::<
+        Sha3_512,
+    >(TEST_PHRASE.as_bytes()));
+
+    // Generate the inner product proof
+    let mut transcript = Transcript::new(TRANSCRIPT_SEED.as_bytes());
     let proof = SharedInnerProductProof::create(
         &mut transcript,
         &Q,
@@ -112,13 +153,13 @@ fn test_simple_inner_product(test_args: &IntegrationTestArgs) -> Result<(), Stri
         &H_factors,
         G.clone(),
         H.clone(),
-        shared_a,
-        shared_b,
-        test_args.mpc_fabric.clone(),
+        a.to_vec(),
+        b.to_vec(),
+        fabric.clone(),
     )
     .map_err(|err| format!("Error proving: {:?}", err))?;
 
-    // Open the proof and verify it
+    // Open the proof and the input commitment, then verify them
     let opened_proof = proof
         .open()
         .map_err(|err| format!("Error opening proof: {:?}", err))?;
@@ -127,7 +168,7 @@ fn test_simple_inner_product(test_args: &IntegrationTestArgs) -> Result<(), Stri
         .open()
         .map_err(|err| format!("Error opening P: {:?}", err))?;
 
-    let mut verifier_transcript = Transcript::new(b"test_simple_inner_product");
+    let mut verifier_transcript = Transcript::new(TRANSCRIPT_SEED.as_bytes());
     if opened_proof
         .verify(
             n,
@@ -149,6 +190,51 @@ fn test_simple_inner_product(test_args: &IntegrationTestArgs) -> Result<(), Stri
     }
 
     Ok(())
+}
+
+/**
+ * Tests
+ */
+
+/// Tests that a simple inner product argument proves correctly
+#[allow(non_snake_case)]
+fn test_simple_inner_product(test_args: &IntegrationTestArgs) -> Result<(), String> {
+    // Party 0 holds the first vector, party 1 holds the second
+    // Expected inner product is 920
+    let my_values = if test_args.party_id == 0 {
+        vec![13, 42]
+    } else {
+        vec![5, 0]
+    };
+    let expected_inner_product = 65u64;
+
+    // Share the values with the peer
+    let borrowed_fabric = test_args.mpc_fabric.as_ref().borrow();
+    let shared_a: Vec<AuthenticatedScalar<_, _>> = my_values
+        .iter()
+        .map(|value| {
+            borrowed_fabric.allocate_private_u64(0 /* party_id */, *value)
+        })
+        .collect::<Result<Vec<_>, MpcError>>()
+        .map_err(|err| format!("Error sharing a values: {:?}", err))?;
+
+    let shared_b: Vec<AuthenticatedScalar<_, _>> = my_values
+        .iter()
+        .map(|value| {
+            borrowed_fabric.allocate_private_u64(1 /* party_id */, *value)
+        })
+        .collect::<Result<Vec<_>, MpcError>>()
+        .map_err(|err| format!("Error sharing b values: {:?}", err))?;
+    let c: AuthenticatedScalar<_, _> = borrowed_fabric.allocate_public_u64(expected_inner_product);
+    let y_inv = generate_challenge_scalar(0 /* party_id */, test_args.mpc_fabric.clone())?;
+
+    prove_and_verify(
+        &shared_a,
+        &shared_b,
+        &c,
+        y_inv,
+        test_args.mpc_fabric.clone(),
+    )
 }
 
 inventory::submit!(IntegrationTest {
