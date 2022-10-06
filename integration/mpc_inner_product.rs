@@ -6,9 +6,13 @@ use bulletproofs::{r1cs_mpc::mpc_inner_product::SharedInnerProductProof, util, B
 use curve25519_dalek::{ristretto::RistrettoPoint, scalar::Scalar};
 use merlin::Transcript;
 use mpc_ristretto::{
-    authenticated_ristretto::AuthenticatedRistretto, authenticated_scalar::AuthenticatedScalar,
-    beaver::SharedValueSource, error::MpcError, network::MpcNetwork,
+    authenticated_ristretto::AuthenticatedRistretto,
+    authenticated_scalar::AuthenticatedScalar,
+    beaver::SharedValueSource,
+    error::{MpcError, MpcNetworkError},
+    network::MpcNetwork,
 };
+use rand::{thread_rng, Rng, RngCore};
 use rand_core::OsRng;
 use sha3::Sha3_512;
 
@@ -343,6 +347,91 @@ fn test_interleaved_inner_product(test_args: &IntegrationTestArgs) -> Result<(),
     prove_and_verify(&a, &b, &c, y_inv, test_args.mpc_fabric.clone())
 }
 
+/// Tests a larger inner product of random values
+///
+/// The two parties perform a size n inner product, where each index of a and b
+/// are assigned randomly to party 0 or party 1. These parties then choose random
+/// values for the inner product
+fn test_random_inner_product(test_args: &IntegrationTestArgs) -> Result<(), String> {
+    // Setup
+    let n = 32;
+    let borrowed_fabric = test_args.mpc_fabric.as_ref().borrow();
+
+    // Party 0 randomly assigns indices
+    let mut rng = thread_rng();
+    let index_assignment: Vec<AuthenticatedScalar<_, _>> = (0..2 * n) // 2n values to fill a and b
+        .map(|_| {
+            borrowed_fabric.allocate_private_u64(0 /* party_id */, rng.gen_range(0, 2))
+        }) // Random number in {0, 1}
+        .collect::<Result<Vec<AuthenticatedScalar<_, _>>, MpcError>>()
+        .map_err(|err| format!("Error sharing index assignment: {:?}", err))?;
+
+    // Open the index assignment
+    let mut shared_index_assignment = index_assignment
+        .iter()
+        .map(|index| index.open())
+        .collect::<Result<Vec<AuthenticatedScalar<_, _>>, MpcNetworkError>>()
+        .map_err(|err| format!("Error opening index assingment: {:?}", err))?;
+
+    // Count the number of elements the local party is to allocate
+    let n_party0 = shared_index_assignment
+        .iter()
+        .filter(|value| value.to_scalar().eq(&Scalar::from(0u64)))
+        .count();
+    let n_party1 = 2 * n - n_party0;
+
+    // Party 0 generates their vector of random values and shares it
+    let mut party0_values = (0..n_party0)
+        .map(|_| {
+            borrowed_fabric.allocate_private_u64(0 /* party_id */, rng.next_u64())
+        })
+        .collect::<Result<Vec<AuthenticatedScalar<_, _>>, MpcError>>()
+        .map_err(|err| format!("Error sharing party 0 values: {:?}", err))?;
+
+    let mut party1_values = (0..n_party1)
+        .map(|_| {
+            borrowed_fabric.allocate_private_u64(1 /* party_id */, rng.next_u64())
+        })
+        .collect::<Result<Vec<AuthenticatedScalar<_, _>>, MpcError>>()
+        .map_err(|err| format!("ERror sharing party 1 values: {:?}", err))?;
+
+    // From the shared values of each party, construct `a` and `b`
+    let all_values = (0..2 * n)
+        .map(|_| {
+            if shared_index_assignment.pop().unwrap().to_scalar() == Scalar::from(0u64) {
+                party0_values.remove(0)
+            } else {
+                party1_values.remove(0)
+            }
+        })
+        .collect::<Vec<AuthenticatedScalar<_, _>>>();
+
+    let a = &all_values[..n];
+    let b = &all_values[n..];
+
+    let expected_inner_product = a
+        .iter()
+        .zip(b.iter())
+        .fold(
+            borrowed_fabric.allocate_zeros(1)[0].clone(),
+            |acc, (ai, bi)| acc + ai * bi,
+        )
+        .open()
+        .map_err(|err| format!("Error opening value: {:?}", err))?;
+
+    let y_inv = generate_challenge_scalar(0 /* party_id */, test_args.mpc_fabric.clone())
+        .map_err(|err| format!("Error sharing value: {:?}", err))?;
+
+    // Prove and verify the inner product
+    prove_and_verify(
+        a,
+        b,
+        &expected_inner_product,
+        y_inv,
+        test_args.mpc_fabric.clone(),
+    )
+}
+
 /// Tests that opening a modified proof fails authentication
 fn test_malleable_proof(test_args: &IntegrationTestArgs) -> Result<(), String> {
     // Party 0 holds the first vector, party 1 holds the second
@@ -397,6 +486,11 @@ inventory::submit!(IntegrationTest {
 inventory::submit!(IntegrationTest {
     name: "mpc-inner-product::test_interleaved_inner_product",
     test_fn: test_interleaved_inner_product,
+});
+
+inventory::submit!(IntegrationTest {
+    name: "mpc-inner-product::test_random_inner_product",
+    test_fn: test_random_inner_product,
 });
 
 inventory::submit!(IntegrationTest {
