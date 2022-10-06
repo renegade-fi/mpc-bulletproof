@@ -197,7 +197,6 @@ where
  */
 
 /// Tests that a simple inner product argument proves correctly
-#[allow(non_snake_case)]
 fn test_simple_inner_product(test_args: &IntegrationTestArgs) -> Result<(), String> {
     // Party 0 holds the first vector, party 1 holds the second
     // Expected inner product is 920
@@ -237,7 +236,62 @@ fn test_simple_inner_product(test_args: &IntegrationTestArgs) -> Result<(), Stri
     )
 }
 
+// Tests an inner product in which the values of party1 and party0 are interleaved
+fn test_interleaved_inner_product(test_args: &IntegrationTestArgs) -> Result<(), String> {
+    // Party 0 holds (a1, a2, a3) and party 1 holds (b1, b2, b3)
+    // We prove the inner product a1 * a2 + a3 * b1 + b2 * b3
+    let my_values = if test_args.party_id == 0 {
+        vec![2u64, 3u64, 4u64, 0u64]
+    } else {
+        vec![5u64, 6u64, 7u64, 0u64]
+    };
+
+    // Share the values with the peer
+    let borrowed_fabric = test_args.mpc_fabric.as_ref().borrow();
+    let party0_values: Vec<AuthenticatedScalar<_, _>> = my_values
+        .iter()
+        .map(|value| {
+            borrowed_fabric.allocate_private_u64(0 /* party_id */, *value)
+        })
+        .collect::<Result<Vec<_>, MpcError>>()
+        .map_err(|err| format!("Error sharing a values: {:?}", err))?;
+
+    let party1_values: Vec<AuthenticatedScalar<_, _>> = my_values
+        .iter()
+        .map(|value| {
+            borrowed_fabric.allocate_private_u64(1 /* party_id */, *value)
+        })
+        .collect::<Result<Vec<_>, MpcError>>()
+        .map_err(|err| format!("Error sharing b values: {:?}", err))?;
+    let a = vec![
+        party0_values[0].clone(),
+        party0_values[2].clone(),
+        party1_values[1].clone(),
+        // Pad to a power of 2
+        party0_values[3].clone(),
+    ];
+    let b = vec![
+        party0_values[1].clone(),
+        party1_values[0].clone(),
+        party1_values[2].clone(),
+        // Pad to a power of 2
+        party1_values[3].clone(),
+    ];
+
+    // 2 * 3 + 4 * 5 + 6 * 7 = 68
+    let c = borrowed_fabric.allocate_public_u64(68);
+    let y_inv = generate_challenge_scalar(0 /* party_id */, test_args.mpc_fabric.clone())?;
+
+    prove_and_verify(&a, &b, &c, y_inv, test_args.mpc_fabric.clone())
+}
+
+// Take inventory
 inventory::submit!(IntegrationTest {
     name: "mpc-inner-product::test_simple_inner_product",
     test_fn: test_simple_inner_product,
+});
+
+inventory::submit!(IntegrationTest {
+    name: "mpc-inner-product::test_interleaved_inner_product",
+    test_fn: test_interleaved_inner_product,
 });
