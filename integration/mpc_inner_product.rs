@@ -21,8 +21,8 @@ use crate::{IntegrationTest, IntegrationTestArgs, SharedMpcFabric};
 /**
  * Constants
  */
-const TEST_PHRASE: &str = "test point";
-const TRANSCRIPT_SEED: &str = "test_inner_product";
+pub(crate) const TEST_PHRASE: &str = "test point";
+pub(crate) const TRANSCRIPT_SEED: &str = "test_inner_product";
 
 /**
  * Utils
@@ -76,19 +76,19 @@ where
         .share(0)
         .G(n)
         .cloned()
-        .map(|value| borrowed_fabric.allocate_public_ristretto_point(value))
+        .map(|value| borrowed_fabric.allocate_public_ristretto(value))
         .collect();
     let H: Vec<AuthenticatedRistretto<_, _>> = bp_gens
         .share(0)
         .H(n)
         .cloned()
-        .map(|value| borrowed_fabric.allocate_public_ristretto_point(value))
+        .map(|value| borrowed_fabric.allocate_public_ristretto(value))
         .collect();
 
     // Q is the generator used for `c`
-    let Q = borrowed_fabric.allocate_public_ristretto_point(RistrettoPoint::hash_from_bytes::<
-        Sha3_512,
-    >(TEST_PHRASE.as_bytes()));
+    let Q = borrowed_fabric.allocate_public_ristretto(RistrettoPoint::hash_from_bytes::<Sha3_512>(
+        TEST_PHRASE.as_bytes(),
+    ));
 
     // Pre-multiply b by iterated powers of y_inv
     let b_prime = b.iter().zip(util::exp_iter(y_inv)).map(|(bi, yi)| bi * yi);
@@ -126,13 +126,13 @@ where
         .share(0)
         .G(n)
         .cloned()
-        .map(|value| borrowed_fabric.allocate_public_ristretto_point(value))
+        .map(|value| borrowed_fabric.allocate_public_ristretto(value))
         .collect();
     let H: Vec<AuthenticatedRistretto<_, _>> = bp_gens
         .share(0)
         .H(n)
         .cloned()
-        .map(|value| borrowed_fabric.allocate_public_ristretto_point(value))
+        .map(|value| borrowed_fabric.allocate_public_ristretto(value))
         .collect();
 
     // Create multipliers for the generators
@@ -140,9 +140,9 @@ where
     let H_factors: Vec<Scalar> = util::exp_iter(y_inv).take(n).collect();
 
     // Q is the generator used to commit to the inner product result `c`
-    let Q = borrowed_fabric.allocate_public_ristretto_point(RistrettoPoint::hash_from_bytes::<
-        Sha3_512,
-    >(TEST_PHRASE.as_bytes()));
+    let Q = borrowed_fabric.allocate_public_ristretto(RistrettoPoint::hash_from_bytes::<Sha3_512>(
+        TEST_PHRASE.as_bytes(),
+    ));
 
     // Generate the inner product proof
     let mut transcript = Transcript::new(TRANSCRIPT_SEED.as_bytes());
@@ -188,13 +188,13 @@ where
         .share(0)
         .G(n)
         .cloned()
-        .map(|value| borrowed_fabric.allocate_public_ristretto_point(value))
+        .map(|value| borrowed_fabric.allocate_public_ristretto(value))
         .collect();
     let H: Vec<AuthenticatedRistretto<_, _>> = bp_gens
         .share(0)
         .H(n)
         .cloned()
-        .map(|value| borrowed_fabric.allocate_public_ristretto_point(value))
+        .map(|value| borrowed_fabric.allocate_public_ristretto(value))
         .collect();
 
     // Create multipliers for the generators
@@ -202,9 +202,9 @@ where
     let H_factors: Vec<Scalar> = util::exp_iter(y_inv).take(n).collect();
 
     // Q is the generator used to commit to the inner product result `c`
-    let Q = borrowed_fabric.allocate_public_ristretto_point(RistrettoPoint::hash_from_bytes::<
-        Sha3_512,
-    >(TEST_PHRASE.as_bytes()));
+    let Q = borrowed_fabric.allocate_public_ristretto(RistrettoPoint::hash_from_bytes::<Sha3_512>(
+        TEST_PHRASE.as_bytes(),
+    ));
 
     // Generate the inner product proof
     let mut transcript = Transcript::new(TRANSCRIPT_SEED.as_bytes());

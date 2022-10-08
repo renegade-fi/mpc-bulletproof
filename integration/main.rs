@@ -3,6 +3,7 @@
 #![cfg(feature = "integration_test")]
 
 mod mpc_inner_product;
+mod mpc_prover;
 
 use std::{borrow::Borrow, cell::RefCell, net::SocketAddr, process::exit, rc::Rc};
 
