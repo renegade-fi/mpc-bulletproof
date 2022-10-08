@@ -35,36 +35,36 @@ const TWO_PHASE_COMMITMENTS: u8 = 1;
 #[allow(non_snake_case)]
 pub struct R1CSProof {
     /// Commitment to the values of input wires in the first phase.
-    pub(super) A_I1: CompressedRistretto,
+    pub(crate) A_I1: CompressedRistretto,
     /// Commitment to the values of output wires in the first phase.
-    pub(super) A_O1: CompressedRistretto,
+    pub(crate) A_O1: CompressedRistretto,
     /// Commitment to the blinding factors in the first phase.
-    pub(super) S1: CompressedRistretto,
+    pub(crate) S1: CompressedRistretto,
     /// Commitment to the values of input wires in the second phase.
-    pub(super) A_I2: CompressedRistretto,
+    pub(crate) A_I2: CompressedRistretto,
     /// Commitment to the values of output wires in the second phase.
-    pub(super) A_O2: CompressedRistretto,
+    pub(crate) A_O2: CompressedRistretto,
     /// Commitment to the blinding factors in the second phase.
-    pub(super) S2: CompressedRistretto,
+    pub(crate) S2: CompressedRistretto,
     /// Commitment to the \\(t_1\\) coefficient of \\( t(x) \\)
-    pub(super) T_1: CompressedRistretto,
+    pub(crate) T_1: CompressedRistretto,
     /// Commitment to the \\(t_3\\) coefficient of \\( t(x) \\)
-    pub(super) T_3: CompressedRistretto,
+    pub(crate) T_3: CompressedRistretto,
     /// Commitment to the \\(t_4\\) coefficient of \\( t(x) \\)
-    pub(super) T_4: CompressedRistretto,
+    pub(crate) T_4: CompressedRistretto,
     /// Commitment to the \\(t_5\\) coefficient of \\( t(x) \\)
-    pub(super) T_5: CompressedRistretto,
+    pub(crate) T_5: CompressedRistretto,
     /// Commitment to the \\(t_6\\) coefficient of \\( t(x) \\)
-    pub(super) T_6: CompressedRistretto,
+    pub(crate) T_6: CompressedRistretto,
     /// Evaluation of the polynomial \\(t(x)\\) at the challenge point \\(x\\)
-    pub(super) t_x: Scalar,
+    pub(crate) t_x: Scalar,
     /// Blinding factor for the synthetic commitment to \\( t(x) \\)
-    pub(super) t_x_blinding: Scalar,
+    pub(crate) t_x_blinding: Scalar,
     /// Blinding factor for the synthetic commitment to the
     /// inner-product arguments
-    pub(super) e_blinding: Scalar,
+    pub(crate) e_blinding: Scalar,
     /// Proof data for the inner-product argument.
-    pub(super) ipp_proof: InnerProductProof,
+    pub(crate) ipp_proof: InnerProductProof,
 }
 
 impl R1CSProof {

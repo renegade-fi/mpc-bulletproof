@@ -8,6 +8,9 @@ use mpc_ristretto::authenticated_scalar::AuthenticatedScalar;
 use mpc_ristretto::beaver::SharedValueSource;
 use mpc_ristretto::network::MpcNetwork;
 
+use crate::errors::MultiproverError;
+use crate::r1cs::R1CSProof;
+
 use super::mpc_inner_product::SharedInnerProductProof;
 
 const ONE_PHASE_COMMITMENTS: u8 = 0;
@@ -119,5 +122,31 @@ impl<N: MpcNetwork + Send, S: SharedValueSource<Scalar>> SharedR1CSProof<N, S> {
 
     fn missing_phase2_commitments(&self) -> bool {
         self.A_I2.is_identity() && self.A_O2.is_identity() && self.S2.is_identity()
+    }
+
+    /// Opens the proof, generating a standard R1CS Proof
+    pub fn open(&self) -> Result<R1CSProof, MultiproverError> {
+        // To open, only the inner product proof must be opened
+        // Every other value is opened during the course of proof generation to maintain
+        // a consisten Merlin transcript
+        let ipp_open = self.ipp_proof.open()?;
+
+        Ok(R1CSProof {
+            A_I1: self.A_I1.value(),
+            A_O1: self.A_O1.value(),
+            S1: self.S1.value(),
+            A_I2: self.A_I2.value(),
+            A_O2: self.A_O2.value(),
+            S2: self.S2.value(),
+            T_1: self.T_1.value(),
+            T_3: self.T_3.value(),
+            T_4: self.T_4.value(),
+            T_5: self.T_5.value(),
+            T_6: self.T_6.value(),
+            t_x: self.t_x.to_scalar(),
+            t_x_blinding: self.t_x_blinding.to_scalar(),
+            e_blinding: self.e_blinding.to_scalar(),
+            ipp_proof: ipp_open,
+        })
     }
 }
