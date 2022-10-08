@@ -9,6 +9,7 @@ use std::net::SocketAddr;
 use alloc::rc::Rc;
 use clear_on_drop::clear::Clear;
 use curve25519_dalek::{ristretto::CompressedRistretto, scalar::Scalar, traits::Identity};
+use itertools::Itertools;
 use merlin::Transcript;
 use mpc_ristretto::{
     authenticated_ristretto::{AuthenticatedCompressedRistretto, AuthenticatedRistretto},
@@ -406,10 +407,11 @@ impl<'t, 'g, N: MpcNetwork + Send, S: SharedValueSource<Scalar>> MpcProver<'t, '
             .borrow_fabric()
             .allocate_private_scalar(owning_party, v_blinding)?;
 
-        // Commit and add the commitment to the transcript.
+        // Commit to the input, open the commitment, and add the commitment to the transcript.
         let value_commit = self
             .pc_gens
             .commit_shared(&shared_v, &shared_v_blinding)
+            .open_and_authenticate()?
             .compress();
         self.transcript.append_point(b"V", &value_commit.value());
 
@@ -438,6 +440,7 @@ impl<'t, 'g, N: MpcNetwork + Send, S: SharedValueSource<Scalar>> MpcProver<'t, '
         let network_v_blinding = self.borrow_fabric().allocate_public_scalar(v_blinding);
 
         // Commit and add the commitment to the transcript
+        // No need to open the commitment, it is assumed to be a public value
         let value_commit = self
             .pc_gens
             .commit_shared(&network_v, &network_v_blinding)
@@ -481,24 +484,39 @@ impl<'t, 'g, N: MpcNetwork + Send, S: SharedValueSource<Scalar>> MpcProver<'t, '
         let shared_v_blinding = &shared_values[v.len()..];
 
         // Create commitments and allocate variables
-        let mut commitments: Vec<AuthenticatedCompressedRistretto<_, _>> = Vec::new();
+        let mut commitments: Vec<AuthenticatedRistretto<_, _>> = Vec::new();
         let mut variables: Vec<MpcVariable<N, S>> = Vec::new();
         for (v, v_blinding) in shared_v.iter().zip(shared_v_blinding.iter()) {
-            let commitment = self.pc_gens.commit_shared(v, v_blinding).compress();
-            self.transcript.append_point(b"V", &commitment.value());
+            // Build a shared Pedersen commitment to this input
+            commitments.push(self.pc_gens.commit_shared(v, v_blinding));
 
+            // Add the variable and its blinding factor to the constraint system
             let i = self.v.len();
             self.v.push(v.clone());
             self.v_blinding.push(v_blinding.clone());
 
-            commitments.push(commitment);
+            // Append the variable pointer to the output
             variables.push(MpcVariable::new_with_type(
                 Variable::Committed(i),
                 self.mpc_fabric.clone(),
-            ));
+            ))
         }
 
-        Ok((commitments, variables))
+        // Open the commitments so that they can be used in the shared transcript
+        let opened_commitments = AuthenticatedRistretto::batch_open_and_authenticate(&commitments)?;
+
+        Ok((
+            opened_commitments
+                .iter()
+                .map(|commit| {
+                    let compressed_commit = commit.compress();
+                    self.transcript
+                        .append_point(b"V", &compressed_commit.value());
+                    compressed_commit
+                })
+                .collect_vec(),
+            variables,
+        ))
     }
 
     /// Use a challenge, `z`, to flatten the constraints in the
@@ -869,7 +887,7 @@ impl<'t, 'g, N: MpcNetwork + Send, S: SharedValueSource<Scalar>> MpcProver<'t, '
                 .commit_shared(&t_poly.t5, &t_blinding_factors[3]);
             let t_6_shared = self
                 .pc_gens
-                .commit_shared(&t_poly.t6, &t_blinding_factors[5]);
+                .commit_shared(&t_poly.t6, &t_blinding_factors[4]);
 
             let opened_values = AuthenticatedRistretto::batch_open_and_authenticate(&[
                 t_1_shared, t_3_shared, t_4_shared, t_5_shared, t_6_shared,
@@ -910,12 +928,12 @@ impl<'t, 'g, N: MpcNetwork + Send, S: SharedValueSource<Scalar>> MpcProver<'t, '
             .sum();
 
         let t_blinding_poly = AuthenticatedPoly6 {
-            t1: blinding_factors[0].clone(),
+            t1: t_blinding_factors[0].clone(),
             t2: t_2_blinding,
-            t3: blinding_factors[1].clone(),
-            t4: blinding_factors[2].clone(),
-            t5: blinding_factors[3].clone(),
-            t6: blinding_factors[4].clone(),
+            t3: t_blinding_factors[1].clone(),
+            t4: t_blinding_factors[2].clone(),
+            t5: t_blinding_factors[3].clone(),
+            t6: t_blinding_factors[4].clone(),
         };
 
         // Evaluate t(x) and \tilde{t}(x) (blinding poly) at the challenge point `x`
