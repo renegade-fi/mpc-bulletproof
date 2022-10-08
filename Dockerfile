@@ -33,6 +33,8 @@ COPY README.md .
 COPY src ./src
 COPY integration ./integration
 
+ENV RUST_BACKTRACE=1
+
 RUN cargo build --test integration \
     --features integration_test
 
