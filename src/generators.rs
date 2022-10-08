@@ -347,7 +347,7 @@ impl<'a, N: MpcNetwork + Send, S: SharedValueSource<Scalar>>
         // the mpc fabric that is leased in the map closure.
         self.gens.G_vec[0]
             .iter()
-            .map(|g| self.borrow_fabric().allocate_public_ristretto_point(*g))
+            .map(|g| self.borrow_fabric().allocate_public_ristretto(*g))
             .collect::<Vec<AuthenticatedRistretto<N, S>>>()
             .into_iter()
             .take(n)
@@ -359,7 +359,7 @@ impl<'a, N: MpcNetwork + Send, S: SharedValueSource<Scalar>>
         // the mpc fabric that is leased in the map closure.
         self.gens.H_vec[0]
             .iter()
-            .map(|h| self.borrow_fabric().allocate_public_ristretto_point(*h))
+            .map(|h| self.borrow_fabric().allocate_public_ristretto(*h))
             .collect::<Vec<AuthenticatedRistretto<N, S>>>()
             .into_iter()
             .take(n)

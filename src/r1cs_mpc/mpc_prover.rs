@@ -22,17 +22,18 @@ use mpc_ristretto::{
 
 use crate::{
     errors::{MultiproverError, R1CSError},
-    r1cs::{
-        ConstraintSystem, LinearCombination, RandomizableConstraintSystem,
-        RandomizedConstraintSystem, Variable,
-    },
+    r1cs::Variable,
     transcript::TranscriptProtocol,
     util, BulletproofGens, PedersenGens,
 };
 
 use super::{
     authenticated_poly::{AuthenticatedPoly6, AuthenticatedVecPoly3},
+    mpc_constraint_system::{
+        MpcConstraintSystem, MpcRandomizableConstraintSystem, MpcRandomizedConstraintSystem,
+    },
     mpc_inner_product::SharedInnerProductProof,
+    mpc_linear_combination::{MpcLinearCombination, MpcVariable},
     proof::SharedR1CSProof,
 };
 
@@ -65,7 +66,7 @@ pub struct MpcProver<'t, 'g, N: MpcNetwork + Send, S: SharedValueSource<Scalar>>
     /// Generators used for Pedersen commitments
     pc_gens: &'g PedersenGens,
     /// Teh constraints accumulated so far.
-    constraints: Vec<LinearCombination>,
+    constraints: Vec<MpcLinearCombination<N, S>>,
     /// Stores assignments to the "left" of multiplication gates.
     a_L: Vec<AuthenticatedScalar<N, S>>,
     /// Stores assignments to the "right" of multiplication gates.
@@ -160,6 +161,27 @@ impl<'t, 'g, N: MpcNetwork + Send, S: SharedValueSource<Scalar>> MpcProver<'t, '
         }
     }
 
+    /// Create a new MpcProver with a given MPC fabric already allocated
+    pub fn new_with_fabric(
+        mpc_fabric: SharedMpcFabric<N, S>,
+        transcript: &'t mut Transcript,
+        pc_gens: &'g PedersenGens,
+    ) -> Self {
+        Self {
+            transcript,
+            pc_gens,
+            mpc_fabric,
+            constraints: Vec::new(),
+            a_L: Vec::new(),
+            a_R: Vec::new(),
+            a_O: Vec::new(),
+            v: Vec::new(),
+            v_blinding: Vec::new(),
+            deferred_constraints: Vec::new(),
+            pending_multiplier: None,
+        }
+    }
+
     /// Helper method to borrow the MPC fabric
     fn borrow_fabric(&self) -> Ref<AuthenticatedMpcFabric<N, S>> {
         self.mpc_fabric.as_ref().borrow()
@@ -171,7 +193,7 @@ impl<'t, 'g, N: MpcNetwork + Send, S: SharedValueSource<Scalar>> MpcProver<'t, '
     }
 }
 
-impl<'t, 'g, N: MpcNetwork + Send, S: SharedValueSource<Scalar>> ConstraintSystem
+impl<'t, 'g, N: MpcNetwork + Send, S: SharedValueSource<Scalar>> MpcConstraintSystem<N, S>
     for MpcProver<'t, 'g, N, S>
 {
     /// Lease the transcript to the caller
@@ -182,17 +204,26 @@ impl<'t, 'g, N: MpcNetwork + Send, S: SharedValueSource<Scalar>> ConstraintSyste
     #[allow(unused_variables)]
     fn multiply(
         &mut self,
-        mut left: LinearCombination,
-        mut right: LinearCombination,
-    ) -> (Variable, Variable, Variable) {
+        mut left: MpcLinearCombination<N, S>,
+        mut right: MpcLinearCombination<N, S>,
+    ) -> (MpcVariable<N, S>, MpcVariable<N, S>, MpcVariable<N, S>) {
         let l = self.eval(&left);
         let r = self.eval(&right);
         let o = &l * &r;
 
         // Create new variables for the results
-        let l_var = Variable::MultiplierLeft(self.a_L.len());
-        let r_var = Variable::MultiplierRight(self.a_R.len());
-        let o_var = Variable::MultiplierOutput(self.a_O.len());
+        let l_var = MpcVariable::new_with_type(
+            Variable::MultiplierLeft(self.a_L.len()),
+            self.mpc_fabric.clone(),
+        );
+        let r_var = MpcVariable::new_with_type(
+            Variable::MultiplierRight(self.a_R.len()),
+            self.mpc_fabric.clone(),
+        );
+        let o_var = MpcVariable::new_with_type(
+            Variable::MultiplierOutput(self.a_O.len()),
+            self.mpc_fabric.clone(),
+        );
 
         // Add the value assignments
         self.a_L.push(l);
@@ -200,15 +231,18 @@ impl<'t, 'g, N: MpcNetwork + Send, S: SharedValueSource<Scalar>> ConstraintSyste
         self.a_O.push(o);
 
         // Constrain the multiplication
-        left.terms.push((l_var, -Scalar::one()));
-        right.terms.push((r_var, -Scalar::one()));
+        left.terms
+            .push((l_var.clone(), -self.borrow_fabric().allocate_public_u64(1)));
+        right
+            .terms
+            .push((r_var.clone(), -self.borrow_fabric().allocate_public_u64(1)));
         self.constrain(left);
         self.constrain(right);
 
         (l_var, r_var, o_var)
     }
 
-    fn allocate(&mut self, assignment: Option<Scalar>) -> Result<Variable, R1CSError> {
+    fn allocate(&mut self, assignment: Option<Scalar>) -> Result<MpcVariable<N, S>, R1CSError> {
         // Allocate a scalar in the MPC network, assume public visibility
         let scalar = assignment.ok_or(R1CSError::MissingAssignment)?;
         let network_scalar = self.borrow_fabric().allocate_public_scalar(scalar);
@@ -223,13 +257,19 @@ impl<'t, 'g, N: MpcNetwork + Send, S: SharedValueSource<Scalar>> ConstraintSyste
                 let allocated_zero = self.borrow_fabric().allocate_public_scalar(Scalar::zero());
                 self.a_R.push(allocated_zero.clone());
                 self.a_O.push(allocated_zero);
-                Ok(Variable::MultiplierLeft(i))
+                Ok(MpcVariable::new_with_type(
+                    Variable::MultiplierLeft(i),
+                    self.mpc_fabric.clone(),
+                ))
             }
             Some(i) => {
                 self.pending_multiplier = None;
                 self.a_R[i] = network_scalar;
                 self.a_O[i] = &self.a_L[i] * &self.a_R[i];
-                Ok(Variable::MultiplierRight(i))
+                Ok(MpcVariable::new_with_type(
+                    Variable::MultiplierRight(i),
+                    self.mpc_fabric.clone(),
+                ))
             }
         }
     }
@@ -237,7 +277,7 @@ impl<'t, 'g, N: MpcNetwork + Send, S: SharedValueSource<Scalar>> ConstraintSyste
     fn allocate_multiplier(
         &mut self,
         input_assignments: Option<(Scalar, Scalar)>,
-    ) -> Result<(Variable, Variable, Variable), R1CSError> {
+    ) -> Result<(MpcVariable<N, S>, MpcVariable<N, S>, MpcVariable<N, S>), R1CSError> {
         // Allocate a scalar in the MPC network, assume public visibility
         let (left, right) = input_assignments.ok_or(R1CSError::MissingAssignment)?;
         let network_left = self.borrow_fabric().allocate_public_scalar(left);
@@ -249,9 +289,18 @@ impl<'t, 'g, N: MpcNetwork + Send, S: SharedValueSource<Scalar>> ConstraintSyste
         self.a_R.push(network_right);
 
         Ok((
-            Variable::MultiplierLeft(self.a_L.len() - 1),
-            Variable::MultiplierRight(self.a_R.len() - 1),
-            Variable::MultiplierOutput(self.a_O.len() - 1),
+            MpcVariable::new_with_type(
+                Variable::MultiplierLeft(self.a_L.len() - 1),
+                self.mpc_fabric.clone(),
+            ),
+            MpcVariable::new_with_type(
+                Variable::MultiplierRight(self.a_R.len() - 1),
+                self.mpc_fabric.clone(),
+            ),
+            MpcVariable::new_with_type(
+                Variable::MultiplierOutput(self.a_O.len() - 1),
+                self.mpc_fabric.clone(),
+            ),
         ))
     }
 
@@ -259,13 +308,13 @@ impl<'t, 'g, N: MpcNetwork + Send, S: SharedValueSource<Scalar>> ConstraintSyste
         self.a_L.len()
     }
 
-    fn constrain(&mut self, lc: LinearCombination) {
+    fn constrain(&mut self, lc: MpcLinearCombination<N, S>) {
         self.constraints.push(lc)
     }
 }
 
-impl<'t, 'g, N: MpcNetwork + Send, S: SharedValueSource<Scalar>> RandomizableConstraintSystem
-    for MpcProver<'t, 'g, N, S>
+impl<'t, 'g, N: MpcNetwork + Send, S: SharedValueSource<Scalar>>
+    MpcRandomizableConstraintSystem<N, S> for MpcProver<'t, 'g, N, S>
 {
     type RandomizedCS = RandomizingMpcProver<'t, 'g, N, S>;
 
@@ -278,7 +327,7 @@ impl<'t, 'g, N: MpcNetwork + Send, S: SharedValueSource<Scalar>> RandomizableCon
     }
 }
 
-impl<'t, 'g, N: MpcNetwork + Send, S: SharedValueSource<Scalar>> ConstraintSystem
+impl<'t, 'g, N: MpcNetwork + Send, S: SharedValueSource<Scalar>> MpcConstraintSystem<N, S>
     for RandomizingMpcProver<'t, 'g, N, S>
 {
     fn transcript(&mut self) -> &mut Transcript {
@@ -287,20 +336,20 @@ impl<'t, 'g, N: MpcNetwork + Send, S: SharedValueSource<Scalar>> ConstraintSyste
 
     fn multiply(
         &mut self,
-        left: LinearCombination,
-        right: LinearCombination,
-    ) -> (Variable, Variable, Variable) {
+        left: MpcLinearCombination<N, S>,
+        right: MpcLinearCombination<N, S>,
+    ) -> (MpcVariable<N, S>, MpcVariable<N, S>, MpcVariable<N, S>) {
         self.prover.multiply(left, right)
     }
 
-    fn allocate(&mut self, assignment: Option<Scalar>) -> Result<Variable, R1CSError> {
+    fn allocate(&mut self, assignment: Option<Scalar>) -> Result<MpcVariable<N, S>, R1CSError> {
         self.prover.allocate(assignment)
     }
 
     fn allocate_multiplier(
         &mut self,
         input_assignments: Option<(Scalar, Scalar)>,
-    ) -> Result<(Variable, Variable, Variable), R1CSError> {
+    ) -> Result<(MpcVariable<N, S>, MpcVariable<N, S>, MpcVariable<N, S>), R1CSError> {
         self.prover.allocate_multiplier(input_assignments)
     }
 
@@ -308,12 +357,12 @@ impl<'t, 'g, N: MpcNetwork + Send, S: SharedValueSource<Scalar>> ConstraintSyste
         self.prover.multipliers_len()
     }
 
-    fn constrain(&mut self, lc: LinearCombination) {
+    fn constrain(&mut self, lc: MpcLinearCombination<N, S>) {
         self.prover.constrain(lc)
     }
 }
 
-impl<'t, 'g, N: MpcNetwork + Send, S: SharedValueSource<Scalar>> RandomizedConstraintSystem
+impl<'t, 'g, N: MpcNetwork + Send, S: SharedValueSource<Scalar>> MpcRandomizedConstraintSystem<N, S>
     for RandomizingMpcProver<'t, 'g, N, S>
 {
     fn challenge_scalar(&mut self, label: &'static [u8]) -> Scalar {
@@ -323,16 +372,16 @@ impl<'t, 'g, N: MpcNetwork + Send, S: SharedValueSource<Scalar>> RandomizedConst
 
 impl<'t, 'g, N: MpcNetwork + Send, S: SharedValueSource<Scalar>> MpcProver<'t, 'g, N, S> {
     /// Evaluate a linear combination of allocated variables
-    fn eval(&self, lc: &LinearCombination) -> AuthenticatedScalar<N, S> {
+    fn eval(&self, lc: &MpcLinearCombination<N, S>) -> AuthenticatedScalar<N, S> {
         lc.terms.iter().fold(
             self.borrow_fabric().allocate_public_u64(0),
             |acc, (var, coeff)| {
-                acc + match var {
-                    Variable::MultiplierLeft(i) => *coeff * &self.a_L[*i],
-                    Variable::MultiplierRight(i) => *coeff * &self.a_R[*i],
-                    Variable::MultiplierOutput(i) => *coeff * &self.a_O[*i],
-                    Variable::Committed(i) => *coeff * &self.v[*i],
-                    Variable::One() => *coeff * self.borrow_fabric().allocate_public_u64(1),
+                acc + match var.get_type() {
+                    Variable::MultiplierLeft(i) => coeff * &self.a_L[i],
+                    Variable::MultiplierRight(i) => coeff * &self.a_R[i],
+                    Variable::MultiplierOutput(i) => coeff * &self.a_O[i],
+                    Variable::Committed(i) => coeff * &self.v[i],
+                    Variable::One() => coeff * self.borrow_fabric().allocate_public_u64(1),
                 }
             },
         )
@@ -342,12 +391,13 @@ impl<'t, 'g, N: MpcNetwork + Send, S: SharedValueSource<Scalar>> MpcProver<'t, '
     ///
     /// The result is a variable allocated both in the MPC network and in the
     /// constraint system; along with its respectively commitment.
+    #[allow(clippy::type_complexity)]
     pub fn commit(
         &mut self,
         owning_party: u64,
         v: Scalar,
         v_blinding: Scalar,
-    ) -> Result<(AuthenticatedCompressedRistretto<N, S>, Variable), MpcError> {
+    ) -> Result<(AuthenticatedCompressedRistretto<N, S>, MpcVariable<N, S>), MpcError> {
         // Allocate the value in the MPC network
         let shared_v = self
             .borrow_fabric()
@@ -356,7 +406,7 @@ impl<'t, 'g, N: MpcNetwork + Send, S: SharedValueSource<Scalar>> MpcProver<'t, '
             .borrow_fabric()
             .allocate_private_scalar(owning_party, v_blinding)?;
 
-        // Add the commitment to the transcript.
+        // Commit and add the commitment to the transcript.
         let value_commit = self
             .pc_gens
             .commit_shared(&shared_v, &shared_v_blinding)
@@ -368,7 +418,87 @@ impl<'t, 'g, N: MpcNetwork + Send, S: SharedValueSource<Scalar>> MpcProver<'t, '
         self.v.push(shared_v);
         self.v_blinding.push(shared_v_blinding);
 
-        Ok((value_commit, Variable::Committed(i)))
+        Ok((
+            value_commit,
+            MpcVariable::new_with_type(Variable::Committed(i), self.mpc_fabric.clone()),
+        ))
+    }
+
+    /// Commit a publically held value
+    ///
+    /// This assumes that all parties involved in the commitment are calling this method with
+    /// the same value
+    pub fn commit_public(
+        &mut self,
+        v: Scalar,
+        v_blinding: Scalar,
+    ) -> (AuthenticatedCompressedRistretto<N, S>, MpcVariable<N, S>) {
+        // Allocate the value in the MPC network
+        let network_v = self.borrow_fabric().allocate_public_scalar(v);
+        let network_v_blinding = self.borrow_fabric().allocate_public_scalar(v_blinding);
+
+        // Commit and add the commitment to the transcript
+        let value_commit = self
+            .pc_gens
+            .commit_shared(&network_v, &network_v_blinding)
+            .compress();
+        self.transcript.append_point(b"V", &value_commit.value());
+
+        // Add the value to the constraint system
+        let i = self.v.len();
+        self.v.push(network_v);
+        self.v_blinding.push(network_v_blinding);
+
+        (
+            value_commit,
+            MpcVariable::new_with_type(Variable::Committed(i), self.mpc_fabric.clone()),
+        )
+    }
+
+    /// From a batch of privately held values, secret share the value and commit to it
+    #[allow(clippy::type_complexity)]
+    pub fn batch_commit(
+        &mut self,
+        owning_party: u64,
+        v: &[Scalar],
+        v_blinding: &[Scalar],
+    ) -> Result<
+        (
+            Vec<AuthenticatedCompressedRistretto<N, S>>,
+            Vec<MpcVariable<N, S>>,
+        ),
+        MpcError,
+    > {
+        let shared_values = self.borrow_fabric().batch_allocate_private_scalars(
+            owning_party,
+            &v.iter()
+                .chain(v_blinding.iter())
+                .copied()
+                .collect::<Vec<Scalar>>(),
+        )?;
+
+        let shared_v = &shared_values[..v.len()];
+        let shared_v_blinding = &shared_values[v.len()..];
+
+        // Create commitments and allocate variables
+        let mut commitments: Vec<AuthenticatedCompressedRistretto<_, _>> = Vec::new();
+        let mut variables: Vec<MpcVariable<N, S>> = Vec::new();
+        for (v, v_blinding) in shared_v.iter().zip(shared_v_blinding.iter()) {
+            let commitment = self.pc_gens.commit_shared(v, v_blinding).compress();
+            self.transcript.append_point(b"V", &commitment.value());
+
+            let i = self.v.len();
+            self.v.push(v.clone());
+            self.v_blinding.push(v_blinding.clone());
+
+            commitments.push(commitment);
+            variables.push(MpcVariable::new_with_type(
+                Variable::Committed(i),
+                self.mpc_fabric.clone(),
+            ));
+        }
+
+        Ok((commitments, variables))
     }
 
     /// Use a challenge, `z`, to flatten the constraints in the
@@ -403,18 +533,18 @@ impl<'t, 'g, N: MpcNetwork + Send, S: SharedValueSource<Scalar>> MpcProver<'t, '
         let mut exp_z = *z;
         for lc in self.constraints.iter() {
             for (var, coeff) in &lc.terms {
-                match var {
+                match var.get_type() {
                     Variable::MultiplierLeft(i) => {
-                        wL[*i] += exp_z * coeff;
+                        wL[i] += exp_z * coeff;
                     }
                     Variable::MultiplierRight(i) => {
-                        wR[*i] += exp_z * coeff;
+                        wR[i] += exp_z * coeff;
                     }
                     Variable::MultiplierOutput(i) => {
-                        wO[*i] += exp_z * coeff;
+                        wO[i] += exp_z * coeff;
                     }
                     Variable::Committed(i) => {
-                        wV[*i] -= exp_z * coeff;
+                        wV[i] -= exp_z * coeff;
                     }
                     Variable::One() => {
                         // The prover doesn't need to handle constant terms
@@ -498,7 +628,7 @@ impl<'t, 'g, N: MpcNetwork + Send, S: SharedValueSource<Scalar>> MpcProver<'t, '
         // Allocate the Pedersen blinding generator in the network
         let B_blinding = self
             .borrow_fabric()
-            .allocate_public_ristretto_point(self.pc_gens.B_blinding);
+            .allocate_public_ristretto(self.pc_gens.B_blinding);
 
         // Construct a commitment to the multiplication gate inputs a_L and a_R
         // This commitment has the form:
@@ -844,7 +974,7 @@ impl<'t, 'g, N: MpcNetwork + Send, S: SharedValueSource<Scalar>> MpcProver<'t, '
         let w = self.transcript.challenge_scalar(b"w");
         let Q = self
             .borrow_fabric()
-            .allocate_public_ristretto_point(w * self.pc_gens.B);
+            .allocate_public_ristretto(w * self.pc_gens.B);
 
         // Chain together the generators from the phase 1 proof and those generators multiplied by
         // `u`; which represent the generators for the phase 2 proof
