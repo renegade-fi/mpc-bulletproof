@@ -141,6 +141,9 @@ impl<'t, 'g, N: MpcNetwork + Send, S: SharedValueSource<Scalar>> MpcProver<'t, '
         transcript: &'t mut Transcript,
         pc_gens: &'g PedersenGens,
     ) -> Self {
+        // Record the beginning of the r1cs protocol
+        transcript.r1cs_domain_sep();
+
         let mpc_fabric = Rc::new(RefCell::new(AuthenticatedMpcFabric::new_with_network(
             party_id,
             network,
@@ -168,6 +171,8 @@ impl<'t, 'g, N: MpcNetwork + Send, S: SharedValueSource<Scalar>> MpcProver<'t, '
         transcript: &'t mut Transcript,
         pc_gens: &'g PedersenGens,
     ) -> Self {
+        transcript.r1cs_domain_sep();
+
         Self {
             transcript,
             pc_gens,
@@ -728,9 +733,14 @@ impl<'t, 'g, N: MpcNetwork + Send, S: SharedValueSource<Scalar>> MpcProver<'t, '
 
         // We once again need to allocate a series of blinding factors for the commitments
         // Here we need 3 + 2 * n2 blinding factors
-        let blinding_factors = self
-            .borrow_fabric()
-            .allocate_random_scalars_batch(3 + 2 * n2);
+        // If there are no 2nd phase commitments, zero out the blinding factors to avoid
+        // unnecessarily consuming the pre-processing functionality's output
+        let blinding_factors = if has_2nd_phase_commitments {
+            self.borrow_fabric()
+                .allocate_random_scalars_batch(3 + 2 * n2)
+        } else {
+            self.borrow_fabric().allocate_zeros(3 + 2 * n2)
+        };
 
         let (i_blinding2, o_blinding2, s_blinding2) = (
             blinding_factors[0].clone(),
@@ -967,12 +977,9 @@ impl<'t, 'g, N: MpcNetwork + Send, S: SharedValueSource<Scalar>> MpcProver<'t, '
 
         // Open the final set of transcript values
         let (t_x_open, t_x_blinding_open, e_blinding_open) = {
-            let opened_values = AuthenticatedScalar::batch_open_and_authenticate(&[
-                t_x.clone(),
-                t_x_blinding.clone(),
-                e_blinding.clone(),
-            ])
-            .map_err(MultiproverError::Mpc)?;
+            let opened_values =
+                AuthenticatedScalar::batch_open_and_authenticate(&[t_x, t_x_blinding, e_blinding])
+                    .map_err(MultiproverError::Mpc)?;
 
             (
                 opened_values[0].clone(),
@@ -1041,9 +1048,9 @@ impl<'t, 'g, N: MpcNetwork + Send, S: SharedValueSource<Scalar>> MpcProver<'t, '
             T_4,
             T_5,
             T_6,
-            t_x,
-            t_x_blinding,
-            e_blinding,
+            t_x: t_x_open,
+            t_x_blinding: t_x_blinding_open,
+            e_blinding: e_blinding_open,
             ipp_proof: ipp,
         })
     }

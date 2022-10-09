@@ -69,7 +69,7 @@ impl<N: MpcNetwork + Send, S: SharedValueSource<Scalar>> From<MpcVariable<N, S>>
     for MpcLinearCombination<N, S>
 {
     fn from(v: MpcVariable<N, S>) -> MpcLinearCombination<N, S> {
-        let coeff = v.borrow_fabric().allocate_public_scalar(Scalar::zero());
+        let coeff = v.borrow_fabric().allocate_public_scalar(Scalar::one());
         MpcLinearCombination {
             terms: vec![(v, coeff)],
         }

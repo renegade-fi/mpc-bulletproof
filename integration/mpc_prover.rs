@@ -124,6 +124,7 @@ impl<N: MpcNetwork + Send, S: SharedValueSource<Scalar>> SimpleCircuit<N, S> {
         let (a_commit, a_vars) = prover
             .batch_commit(0 /* owning_party */, a, &blinders[..2])
             .map_err(|err| format!("Error committing input values: {:?}", err))?;
+
         let (b_commit, b_vars) = prover
             .batch_commit(1 /* owning_party */, b, &blinders[..2])
             .map_err(|err| format!("error sharing values: {:?}", err))?;
