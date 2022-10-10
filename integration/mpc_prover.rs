@@ -356,6 +356,37 @@ fn test_r1cs_interleaved_witness(test_args: &IntegrationTestArgs) -> Result<(), 
         .map_err(|err| format!("Verification error: {:?}", err))
 }
 
+fn test_r1cs_proof_malleability(test_args: &IntegrationTestArgs) -> Result<(), String> {
+    // Both parties commit to their inputs
+    // Party 0 holds (a1, a2), party 1 holds (b1, b2)
+    let my_values = if test_args.party_id == 0 {
+        [2u64, 3u64]
+    } else {
+        [4u64, 5u64]
+    };
+    let my_scalars: Vec<Scalar> = my_values.into_iter().map(Scalar::from).collect();
+
+    // Commit and share values
+    let pc_gens = PedersenGens::default();
+    let bp_gens = BulletproofGens::new(2, 1);
+
+    let (mut proof, _, _, _) = SimpleCircuit::prove(
+        &pc_gens,
+        &bp_gens,
+        &my_scalars,
+        &my_scalars,
+        Scalar::from(920u64), // Expected value of the statement defined by the gadget
+        test_args.mpc_fabric.clone(),
+    )?;
+
+    // Party 1 tries to corrupt the proof
+    if test_args.party_id == 1 {
+        proof.0.ipp_proof.a += Scalar::from(10u64);
+    }
+    proof.0.open().map_or(Ok(()), |_| {
+        Err("Expected authentication failure, authentication passed...".to_string())
+    })
+}
 /**
  * Take inventory
  */
@@ -368,4 +399,9 @@ inventory::submit!(IntegrationTest {
 inventory::submit!(IntegrationTest {
     name: "mpc-prover::test_r1cs_interleaved_witness",
     test_fn: test_r1cs_interleaved_witness,
+});
+
+inventory::submit!(IntegrationTest {
+    name: "mpc-prover::test_r1cs_proof_malleability",
+    test_fn: test_r1cs_proof_malleability,
 });

@@ -65,7 +65,11 @@ pub struct SharedR1CSProof<N: MpcNetwork + Send, S: SharedValueSource<Scalar>> {
     /// inner-product arguments
     pub(super) e_blinding: AuthenticatedScalar<N, S>,
     /// Proof data for the inner-product argument.
+    /// Made public for integration tests to test malleability
+    #[cfg(not(feature = "integration_test"))]
     pub(super) ipp_proof: SharedInnerProductProof<N, S>,
+    #[cfg(feature = "integration_test")]
+    pub ipp_proof: SharedInnerProductProof<N, S>,
 }
 
 impl<N: MpcNetwork + Send, S: SharedValueSource<Scalar>> SharedR1CSProof<N, S> {
