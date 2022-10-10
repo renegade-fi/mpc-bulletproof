@@ -1,3 +1,4 @@
+#![allow(unused_doc_comments)]
 use std::iter;
 
 use bulletproofs::{
@@ -15,14 +16,19 @@ use merlin::Transcript;
 use mpc_ristretto::{
     authenticated_ristretto::{AuthenticatedCompressedRistretto, AuthenticatedRistretto},
     beaver::SharedValueSource,
-    network::MpcNetwork,
+    network::{MpcNetwork, QuicTwoPartyNet},
 };
 use rand::{CryptoRng, RngCore};
 use rand_core::OsRng;
 
 use crate::{
-    mpc_inner_product::TRANSCRIPT_SEED, IntegrationTest, IntegrationTestArgs, SharedMpcFabric,
+    mpc_inner_product::TRANSCRIPT_SEED, IntegrationTest, IntegrationTestArgs, PartyIDBeaverSource,
+    SharedMpcFabric,
 };
+
+/**
+ * Helpers
+ */
 
 pub(crate) struct RandomScalarGenerator<'a, T: RngCore + CryptoRng> {
     rng: &'a mut T,
@@ -198,10 +204,12 @@ impl<N: MpcNetwork + Send, S: SharedValueSource<Scalar>> SimpleCircuit<N, S> {
     }
 }
 
+/**
+ * Tests
+ */
+
 /// Tests that proving a simple statement works properly
 fn test_simple_r1cs(test_args: &IntegrationTestArgs) -> Result<(), String> {
-    // Setup
-
     // Both parties commit to their inputs
     // Party 0 holds (a1, a2), party 1 holds (b1, b2)
     let my_values = if test_args.party_id == 0 {
@@ -227,7 +235,137 @@ fn test_simple_r1cs(test_args: &IntegrationTestArgs) -> Result<(), String> {
     proof.verify(&pc_gens, &bp_gens, &a_commit, &b_commit, &c_commit)
 }
 
+/// Tests the case in which the parties hold interleaved witness variables
+fn test_r1cs_interleaved_witness(test_args: &IntegrationTestArgs) -> Result<(), String> {
+    // Setup
+    let mut rng = OsRng {};
+    #[allow(clippy::if_same_then_else)]
+    let my_values = if test_args.party_id == 0 {
+        [2u64 /* a1 */, 4u64 /* b2 */]
+    } else {
+        [6u64 /* a2 */, 8u64 /* b1 */]
+    };
+
+    let my_scalars = my_values.iter().map(|v| Scalar::from(*v)).collect_vec();
+
+    let pc_gens = PedersenGens::default();
+    let bp_gens = BulletproofGens::new(2, 1);
+
+    // Party 0 holds (a1, b2), party 1 holds (a2, b1)
+    // Create the proof system
+    let mut prover_transcript = Transcript::new(TRANSCRIPT_SEED.as_bytes());
+    let mut prover = MpcProver::new_with_fabric(
+        test_args.mpc_fabric.clone(),
+        &mut prover_transcript,
+        &pc_gens,
+    );
+
+    // Commit to input and result values
+    let mut random_scalar_chain = RandomScalarGenerator::new(&mut rng);
+    let blinders = [
+        random_scalar_chain.next().unwrap(),
+        random_scalar_chain.next().unwrap(),
+        random_scalar_chain.next().unwrap(),
+    ];
+
+    let (party0_commit, party0_vars) = prover
+        .batch_commit(0 /* owning_party */, &my_scalars, &blinders[..2])
+        .map_err(|err| format!("Error committing input values: {:?}", err))?;
+
+    let (party1_commit, party1_vars) = prover
+        .batch_commit(1 /* owning_party */, &my_scalars, &blinders[..2])
+        .map_err(|err| format!("error sharing values: {:?}", err))?;
+
+    let (c_commit, c_var) = prover
+        .commit(
+            0, /* owning_party */
+            Scalar::from(1960u64),
+            blinders[2],
+        )
+        .map_err(|err| format!("Error commiting to output: {:?}", err))?;
+
+    // Apply the gadget to generate the constraints, then prove
+    SimpleCircuit::gadget(
+        &mut prover,
+        vec![party0_vars[0].clone(), party1_vars[0].clone()],
+        vec![party1_vars[1].clone(), party0_vars[1].clone()],
+        c_var,
+    )
+    .map_err(|err| format!("Error building constraints: {:?}", err))?;
+
+    let proof = prover
+        .prove(&bp_gens)
+        .map_err(|err| format!("Error proving: {:?}", err))?
+        .open()
+        .map_err(|err| format!("Error opening proof: {:?}", err))?;
+
+    // Build a verifier
+    let mut verifier_transcript = Transcript::new(TRANSCRIPT_SEED.as_bytes());
+    let mut verifier = Verifier::new(&mut verifier_transcript);
+
+    // Commit to the values in the verifier
+    let verifier_party0_vars = party0_commit
+        .iter()
+        .map(|commit| {
+            verifier.commit(
+                commit
+                    .decompress()
+                    .unwrap()
+                    .open_and_authenticate()
+                    .unwrap()
+                    .compress()
+                    .value(),
+            )
+        })
+        .collect_vec();
+
+    let verifier_party1_vars = party1_commit
+        .iter()
+        .map(|v| {
+            verifier.commit(
+                v.decompress()
+                    .unwrap()
+                    .open_and_authenticate()
+                    .unwrap()
+                    .compress()
+                    .value(),
+            )
+        })
+        .collect_vec();
+
+    let verifier_c_var = verifier.commit(
+        c_commit
+            .decompress()
+            .unwrap()
+            .open_and_authenticate()
+            .unwrap()
+            .compress()
+            .value(),
+    );
+
+    SimpleCircuit::<QuicTwoPartyNet, PartyIDBeaverSource>::single_prover_gadget(
+        &mut verifier,
+        vec![verifier_party0_vars[0], verifier_party1_vars[0]],
+        vec![verifier_party1_vars[1], verifier_party0_vars[1]],
+        verifier_c_var,
+    )
+    .map_err(|err| format!("Error specifying verifier constraints: {:?}", err))?;
+
+    verifier
+        .verify(&proof, &pc_gens, &bp_gens)
+        .map_err(|err| format!("Verification error: {:?}", err))
+}
+
+/**
+ * Take inventory
+ */
+
 inventory::submit!(IntegrationTest {
     name: "mpc-prover::test_simple_r1cs",
     test_fn: test_simple_r1cs
+});
+
+inventory::submit!(IntegrationTest {
+    name: "mpc-prover::test_r1cs_interleaved_witness",
+    test_fn: test_r1cs_interleaved_witness,
 });
