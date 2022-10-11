@@ -572,6 +572,7 @@ impl<'a, N: MpcNetwork + Send + 'a, S: SharedValueSource<Scalar> + 'a> ShufflePr
     }
 }
 
+/// Tests the second phase commitments + constraints in the MPC system
 fn test_shuffle_proof(test_args: &IntegrationTestArgs) -> Result<(), String> {
     // Values, for the sake of this test the permutation is a reversal
     let k = 8;
@@ -600,6 +601,34 @@ fn test_shuffle_proof(test_args: &IntegrationTestArgs) -> Result<(), String> {
     proof.verify(&pc_gens, &bp_gens, &x_commit, &y_commit)
 }
 
+/// Tests that a false statement fails verification
+fn test_false_shuffle(test_args: &IntegrationTestArgs) -> Result<(), String> {
+    let k = 8;
+    let mut rng = OsRng {};
+    let my_values = (0u64..k).map(|_| Scalar::random(&mut rng)).collect_vec();
+
+    // Setup
+    let pc_gens = PedersenGens::default();
+    let bp_gens = BulletproofGens::new(
+        2 * k as usize, /* gens_capacity */
+        1,              /* party_capacity */
+    );
+
+    let (proof, x_commit, y_commit) = ShuffleProof::prove(
+        &my_values,
+        &my_values,
+        &pc_gens,
+        &bp_gens,
+        test_args.mpc_fabric.clone(),
+    )?;
+
+    proof
+        .verify(&pc_gens, &bp_gens, &x_commit, &y_commit)
+        .map_or(Ok(()), |_| {
+            Err("Expected verification failure, verification passed...".to_string())
+        })
+}
+
 /**
  * Take inventory
  */
@@ -622,4 +651,9 @@ inventory::submit!(IntegrationTest {
 inventory::submit!(IntegrationTest {
     name: "mpc-prover::test_shuffle_proof",
     test_fn: test_shuffle_proof,
+});
+
+inventory::submit!(IntegrationTest {
+    name: "mpc-prover::test_false_shuffle",
+    test_fn: test_false_shuffle,
 });
