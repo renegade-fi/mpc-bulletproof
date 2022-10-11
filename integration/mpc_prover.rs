@@ -2,10 +2,17 @@
 use std::iter;
 
 use bulletproofs::{
-    r1cs::{R1CSError, RandomizableConstraintSystem, Variable, Verifier},
+    r1cs::{
+        ConstraintSystem, R1CSError, RandomizableConstraintSystem, RandomizedConstraintSystem,
+        Variable, Verifier,
+    },
     r1cs_mpc::{
-        mpc_constraint_system::MpcRandomizableConstraintSystem,
-        mpc_linear_combination::MpcVariable, mpc_prover::MpcProver, proof::SharedR1CSProof,
+        mpc_constraint_system::{
+            MpcConstraintSystem, MpcRandomizableConstraintSystem, MpcRandomizedConstraintSystem,
+        },
+        mpc_linear_combination::MpcVariable,
+        mpc_prover::MpcProver,
+        proof::SharedR1CSProof,
     },
     BulletproofGens, PedersenGens,
 };
@@ -56,9 +63,9 @@ impl<'a, T: RngCore + CryptoRng> Iterator for RandomScalarGenerator<'a, T> {
 /// Result is `c`
 struct SimpleCircuit<N: MpcNetwork + Send, S: SharedValueSource<Scalar>>(SharedR1CSProof<N, S>);
 
-impl<N: MpcNetwork + Send, S: SharedValueSource<Scalar>> SimpleCircuit<N, S> {
+impl<'s, N: MpcNetwork + Send, S: SharedValueSource<Scalar>> SimpleCircuit<N, S> {
     /// Gadget that applies constraints to the constraint system
-    fn gadget<CS: MpcRandomizableConstraintSystem<N, S>>(
+    fn gadget<CS: MpcRandomizableConstraintSystem<'s, N, S>>(
         cs: &mut CS,
         a: Vec<MpcVariable<N, S>>,
         b: Vec<MpcVariable<N, S>>,
@@ -387,6 +394,212 @@ fn test_r1cs_proof_malleability(test_args: &IntegrationTestArgs) -> Result<(), S
         Err("Expected authentication failure, authentication passed...".to_string())
     })
 }
+
+/// A shuffle proof proves that `x` is a permutation of `y`
+pub struct ShuffleProof<N: MpcNetwork + Send, S: SharedValueSource<Scalar>>(SharedR1CSProof<N, S>);
+
+impl<'a, N: MpcNetwork + Send + 'a, S: SharedValueSource<Scalar> + 'a> ShuffleProof<N, S> {
+    fn gadget<'b, CS: MpcRandomizableConstraintSystem<'a, N, S>>(
+        cs: &'b mut CS,
+        x: Vec<MpcVariable<N, S>>,
+        y: Vec<MpcVariable<N, S>>,
+    ) -> Result<(), String>
+    where
+        'a: 'b,
+    {
+        assert_eq!(x.len(), y.len());
+        let k = x.len();
+
+        if k == 1 {
+            cs.constrain(&y[0] - &x[0]);
+            return Ok(());
+        }
+
+        cs.specify_randomized_constraints(move |cs| {
+            let z = cs.challenge_scalar(b"shuffle challenge");
+
+            let (_, _, last_mulx_out) = cs.multiply(&x[k - 1] - z, &x[k - 2] - z);
+            let first_mulx_out = (0..k - 2).rev().fold(last_mulx_out, |acc, i| {
+                let (_, _, o) = cs.multiply(acc.into(), &x[i] - z);
+                o
+            });
+
+            let (_, _, last_muly_out) = cs.multiply(&y[k - 1] - z, &y[k - 2] - z);
+            let first_muly_out = (0..k - 2).rev().fold(last_muly_out, |acc, i| {
+                let (_, _, o) = cs.multiply(acc.into(), &y[i] - z);
+                o
+            });
+
+            cs.constrain(first_mulx_out - first_muly_out);
+
+            Ok(())
+        })
+        .map_err(|err| format!("Error building constraints: {:?}", err))?;
+
+        Ok(())
+    }
+
+    fn single_prover_gadget<CS: RandomizableConstraintSystem>(
+        cs: &mut CS,
+        x: Vec<Variable>,
+        y: Vec<Variable>,
+    ) -> Result<(), String> {
+        assert_eq!(x.len(), y.len());
+        let k = x.len();
+
+        if k == 1 {
+            cs.constrain(y[0] - x[0]);
+            return Ok(());
+        }
+
+        cs.specify_randomized_constraints(move |cs| {
+            let z = cs.challenge_scalar(b"shuffle challenge");
+            let (_, _, last_mulx_out) = cs.multiply(x[k - 1] - z, x[k - 2] - z);
+            let first_mulx_out = (0..k - 2).rev().fold(last_mulx_out, |acc, i| {
+                let (_, _, o) = cs.multiply(acc.into(), x[i] - z);
+                o
+            });
+
+            let (_, _, last_muly_out) = cs.multiply(y[k - 1] - z, y[k - 2] - z);
+            let first_muly_out = (0..k - 2).rev().fold(last_muly_out, |acc, i| {
+                let (_, _, o) = cs.multiply(acc.into(), y[i] - z);
+                o
+            });
+
+            cs.constrain(first_mulx_out - first_muly_out);
+
+            Ok(())
+        })
+        .map_err(|err| format!("Error building constraints: {:?}", err))?;
+
+        Ok(())
+    }
+
+    #[allow(clippy::type_complexity)]
+    pub(crate) fn prove(
+        x: &[Scalar],
+        y: &[Scalar],
+        pc_gens: &PedersenGens,
+        bp_gens: &BulletproofGens,
+        mpc_fabric: SharedMpcFabric<N, S>,
+    ) -> Result<
+        (
+            Self,
+            Vec<AuthenticatedCompressedRistretto<N, S>>, // `x` commitments
+            Vec<AuthenticatedCompressedRistretto<N, S>>, // `y` commitments
+        ),
+        String,
+    > {
+        assert_eq!(x.len(), y.len());
+
+        // Setup
+        let mut rng = OsRng {};
+        let mut random_scalar_chain = RandomScalarGenerator::new(&mut rng);
+
+        let blinders = (0..x.len() * 2)
+            .map(|_| random_scalar_chain.next().unwrap())
+            .collect_vec();
+
+        // Build the prover
+        let mut prover_transcript = Transcript::new(TRANSCRIPT_SEED.as_bytes());
+        let mut prover = MpcProver::new_with_fabric(mpc_fabric, &mut prover_transcript, pc_gens);
+
+        // Commit to the inputs
+        let (x_commit, x_vars) = prover
+            .batch_commit(0 /* owning_party */, x, &blinders[0..x.len()])
+            .map_err(|err| format!("Error committing to `x` values: {:?}", err))?;
+
+        let (y_commit, y_vars) = prover
+            .batch_commit(1 /* owning_party */, y, &blinders[x.len()..])
+            .map_err(|err| format!("Error committing to `y` values: {:?}", err))?;
+
+        // Apply the gadget to specify the constraints and prove the statement
+        Self::gadget(&mut prover, x_vars, y_vars)
+            .map_err(|err| format!("Error specifying constraints: {:?}", err))?;
+
+        let proof = prover
+            .prove(bp_gens)
+            .map_err(|err| format!("Error proving: {:?}", err))?;
+
+        Ok((Self(proof), x_commit, y_commit))
+    }
+
+    pub(crate) fn verify<'b>(
+        &self,
+        pc_gens: &'b PedersenGens,
+        bp_gens: &'b BulletproofGens,
+        x_commit: &[AuthenticatedCompressedRistretto<N, S>],
+        y_commit: &[AuthenticatedCompressedRistretto<N, S>],
+    ) -> Result<(), String> {
+        // Open the proof and the commitments
+        let opened_proof = self
+            .0
+            .open()
+            .map_err(|err| format!("Error opening proof: {:?}", err))?;
+
+        let opened_commitments = AuthenticatedRistretto::batch_open_and_authenticate(
+            &x_commit
+                .iter()
+                .chain(y_commit.iter())
+                .map(|x| x.decompress().unwrap())
+                .collect_vec(),
+        )
+        .map_err(|err| format!("Error opening commitments: {:?}", err))?;
+
+        let opened_x_commit = &opened_commitments[..x_commit.len()];
+        let opened_y_commit = &opened_commitments[x_commit.len()..];
+
+        // Build the verifier
+        let mut verifier_transcript = Transcript::new(TRANSCRIPT_SEED.as_bytes());
+        let mut verifier = Verifier::new(&mut verifier_transcript);
+
+        // Commit to the inputs in the verifier
+        let x_input = opened_x_commit
+            .iter()
+            .map(|x| verifier.commit(x.compress().value()))
+            .collect_vec();
+        let y_input = opened_y_commit
+            .iter()
+            .map(|y| verifier.commit(y.compress().value()))
+            .collect_vec();
+
+        Self::single_prover_gadget(&mut verifier, x_input, y_input)
+            .map_err(|err| format!("Error specifying constraints for verifier: {:?}", err))?;
+
+        verifier
+            .verify(&opened_proof, pc_gens, bp_gens)
+            .map_err(|err| format!("Error verifying proof: {:?}", err))
+    }
+}
+
+fn test_shuffle_proof(test_args: &IntegrationTestArgs) -> Result<(), String> {
+    // Values, for the sake of this test the permutation is a reversal
+    let k = 8;
+    let my_values = if test_args.party_id == 0 {
+        (0u64..k).collect_vec()
+    } else {
+        (0u64..k).rev().collect_vec()
+    };
+    let my_scalars = my_values.into_iter().map(Scalar::from).collect_vec();
+
+    // Setup
+    let pc_gens = PedersenGens::default();
+    let bp_gens = BulletproofGens::new(
+        2 * k as usize, /* gens_capacity */
+        1,              /* party_capacity */
+    );
+
+    let (proof, x_commit, y_commit) = ShuffleProof::prove(
+        &my_scalars,
+        &my_scalars,
+        &pc_gens,
+        &bp_gens,
+        test_args.mpc_fabric.clone(),
+    )?;
+
+    proof.verify(&pc_gens, &bp_gens, &x_commit, &y_commit)
+}
+
 /**
  * Take inventory
  */
@@ -404,4 +617,9 @@ inventory::submit!(IntegrationTest {
 inventory::submit!(IntegrationTest {
     name: "mpc-prover::test_r1cs_proof_malleability",
     test_fn: test_r1cs_proof_malleability,
+});
+
+inventory::submit!(IntegrationTest {
+    name: "mpc-prover::test_shuffle_proof",
+    test_fn: test_shuffle_proof,
 });
