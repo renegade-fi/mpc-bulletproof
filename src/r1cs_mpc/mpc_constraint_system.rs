@@ -20,7 +20,7 @@ use super::mpc_linear_combination::{MpcLinearCombination, MpcVariable};
 /// verifier, gadgets for the constraint system should be written
 /// using the `ConstraintSystem` trait, so that the prover and
 /// verifier share the logic for specifying constraints.
-pub trait MpcConstraintSystem<N: MpcNetwork + Send, S: SharedValueSource<Scalar>> {
+pub trait MpcConstraintSystem<'a, N: MpcNetwork + Send, S: SharedValueSource<Scalar>> {
     /// Leases the proof transcript to the user, so they can
     /// add extra data to which the proof must be bound, but which
     /// is not available before creation of the constraint system.
@@ -86,11 +86,11 @@ pub trait MpcConstraintSystem<N: MpcNetwork + Send, S: SharedValueSource<Scalar>
 /// while gadgets that need randomization should use trait bound `CS: RandomizedConstraintSystem`.
 /// Gadgets generally _should not_ use this trait as a bound on the CS argument: it should be used
 /// by the higher-order protocol that composes gadgets together.
-pub trait MpcRandomizableConstraintSystem<N: MpcNetwork + Send, S: SharedValueSource<Scalar>>:
-    MpcConstraintSystem<N, S>
+pub trait MpcRandomizableConstraintSystem<'a, N: MpcNetwork + Send, S: SharedValueSource<Scalar>>:
+    MpcConstraintSystem<'a, N, S>
 {
     /// Represents a concrete type for the CS in a randomization phase.
-    type RandomizedCS: MpcRandomizedConstraintSystem<N, S>;
+    type RandomizedCS: MpcRandomizedConstraintSystem<'a, N, S>;
 
     /// Specify additional variables and constraints randomized using a challenge scalar
     /// bound to the assignments of the non-randomized variables.
@@ -113,7 +113,7 @@ pub trait MpcRandomizableConstraintSystem<N: MpcNetwork + Send, S: SharedValueSo
     /// ```
     fn specify_randomized_constraints<F>(&mut self, callback: F) -> Result<(), R1CSError>
     where
-        F: 'static + Fn(&mut Self::RandomizedCS) -> Result<(), R1CSError>;
+        F: 'a + Fn(&mut Self::RandomizedCS) -> Result<(), R1CSError>;
 }
 
 /// Represents a constraint system in the second phase:
@@ -121,8 +121,8 @@ pub trait MpcRandomizableConstraintSystem<N: MpcNetwork + Send, S: SharedValueSo
 ///
 /// Note: this trait also includes `ConstraintSystem` trait
 /// in order to allow composition of gadgets: e.g. a shuffle gadget can be used in both phases.
-pub trait MpcRandomizedConstraintSystem<N: MpcNetwork + Send, S: SharedValueSource<Scalar>>:
-    MpcConstraintSystem<N, S>
+pub trait MpcRandomizedConstraintSystem<'a, N: MpcNetwork + Send, S: SharedValueSource<Scalar>>:
+    MpcConstraintSystem<'a, N, S>
 {
     /// Generates a challenge scalar.
     ///

@@ -69,9 +69,20 @@ impl<N: MpcNetwork + Send, S: SharedValueSource<Scalar>> From<MpcVariable<N, S>>
     for MpcLinearCombination<N, S>
 {
     fn from(v: MpcVariable<N, S>) -> MpcLinearCombination<N, S> {
-        let coeff = v.borrow_fabric().allocate_public_scalar(Scalar::one());
+        let coeff = v.borrow_fabric().allocate_public_u64(1);
         MpcLinearCombination {
             terms: vec![(v, coeff)],
+        }
+    }
+}
+
+impl<'a, N: MpcNetwork + Send, S: SharedValueSource<Scalar>> From<&'a MpcVariable<N, S>>
+    for MpcLinearCombination<N, S>
+{
+    fn from(v: &'a MpcVariable<N, S>) -> Self {
+        let coeff = v.borrow_fabric().allocate_public_u64(1);
+        MpcLinearCombination {
+            terms: vec![(v.clone(), coeff)],
         }
     }
 }
@@ -95,8 +106,36 @@ impl<N: MpcNetwork + Send, S: SharedValueSource<Scalar>, L: Into<MpcLinearCombin
     }
 }
 
+impl<
+        'a,
+        N: MpcNetwork + Send,
+        S: SharedValueSource<Scalar>,
+        L: Into<MpcLinearCombination<N, S>>,
+    > Add<L> for &'a MpcVariable<N, S>
+{
+    type Output = MpcLinearCombination<N, S>;
+
+    fn add(self, other: L) -> Self::Output {
+        MpcLinearCombination::from(self) + other.into()
+    }
+}
+
 impl<N: MpcNetwork + Send, S: SharedValueSource<Scalar>, L: Into<MpcLinearCombination<N, S>>> Sub<L>
     for MpcVariable<N, S>
+{
+    type Output = MpcLinearCombination<N, S>;
+
+    fn sub(self, other: L) -> Self::Output {
+        MpcLinearCombination::from(self) - other.into()
+    }
+}
+
+impl<
+        'a,
+        N: MpcNetwork + Send,
+        S: SharedValueSource<Scalar>,
+        L: Into<MpcLinearCombination<N, S>>,
+    > Sub<L> for &'a MpcVariable<N, S>
 {
     type Output = MpcLinearCombination<N, S>;
 
@@ -170,6 +209,30 @@ impl<'a, N: MpcNetwork + Send, S: SharedValueSource<Scalar>> Sub<&'a MpcVariable
 
     fn sub(self, other: &'a MpcVariable<N, S>) -> Self::Output {
         self - other.clone()
+    }
+}
+
+impl<'a, N: MpcNetwork + Send, S: SharedValueSource<Scalar>> Sub<Scalar> for &'a MpcVariable<N, S> {
+    type Output = MpcLinearCombination<N, S>;
+
+    fn sub(self, other: Scalar) -> Self::Output {
+        self.clone() - other
+    }
+}
+
+impl<N: MpcNetwork + Send, S: SharedValueSource<Scalar>> Sub<Scalar> for MpcVariable<N, S> {
+    type Output = MpcLinearCombination<N, S>;
+
+    fn sub(self, other: Scalar) -> Self::Output {
+        // let coeff = self.borrow_fabric().allocate_public_scalar(-other);
+        let self_scalar = self.borrow_fabric().allocate_public_u64(1);
+        let other_scalar = self.borrow_fabric().allocate_public_scalar(-other);
+        MpcLinearCombination {
+            terms: vec![
+                (MpcVariable::one(self.fabric.clone()), other_scalar),
+                (self, self_scalar),
+            ],
+        }
     }
 }
 

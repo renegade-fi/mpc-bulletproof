@@ -61,7 +61,7 @@ pub(crate) type SharedMpcFabric<N, S> = Rc<RefCell<AuthenticatedMpcFabric<N, S>>
 /// challenges from the protocol transcript that preceeds them. These constraints are encoded in the
 /// `deferred_constraints` field.
 #[allow(dead_code, non_snake_case)]
-pub struct MpcProver<'t, 'g, N: MpcNetwork + Send, S: SharedValueSource<Scalar>> {
+pub struct MpcProver<'a, 't, 'g, N: MpcNetwork + Send, S: SharedValueSource<Scalar>> {
     /// The protocol transcript, used for constructing Fiat-Shamir challenges
     transcript: &'t mut Transcript,
     /// Generators used for Pedersen commitments
@@ -85,7 +85,7 @@ pub struct MpcProver<'t, 'g, N: MpcNetwork + Send, S: SharedValueSource<Scalar>>
     /// when non-randomized variables are committed.
     #[allow(clippy::type_complexity)]
     deferred_constraints:
-        Vec<Box<dyn Fn(&mut RandomizingMpcProver<'t, 'g, N, S>) -> Result<(), R1CSError>>>,
+        Vec<Box<dyn Fn(&mut RandomizingMpcProver<'a, 't, 'g, N, S>) -> Result<(), R1CSError> + 'a>>,
     /// The MPC Fabric used to allocate values
     mpc_fabric: SharedMpcFabric<N, S>,
 }
@@ -94,11 +94,11 @@ pub struct MpcProver<'t, 'g, N: MpcNetwork + Send, S: SharedValueSource<Scalar>>
 ///
 /// In this phase constraints may be built using challenge scalars derived from the
 /// protocol transcript so far.
-pub struct RandomizingMpcProver<'t, 'g, N: MpcNetwork + Send, S: SharedValueSource<Scalar>> {
-    prover: MpcProver<'t, 'g, N, S>,
+pub struct RandomizingMpcProver<'a, 't, 'g, N: MpcNetwork + Send, S: SharedValueSource<Scalar>> {
+    prover: MpcProver<'a, 't, 'g, N, S>,
 }
 
-impl<'t, 'g, S: SharedValueSource<Scalar>> MpcProver<'t, 'g, QuicTwoPartyNet, S> {
+impl<'a, 't, 'g, S: SharedValueSource<Scalar>> MpcProver<'a, 't, 'g, QuicTwoPartyNet, S> {
     /// Create a new MPC prover
     pub fn new(
         party_id: u64,
@@ -132,7 +132,7 @@ impl<'t, 'g, S: SharedValueSource<Scalar>> MpcProver<'t, 'g, QuicTwoPartyNet, S>
     }
 }
 
-impl<'t, 'g, N: MpcNetwork + Send, S: SharedValueSource<Scalar>> MpcProver<'t, 'g, N, S> {
+impl<'a, 't, 'g, N: MpcNetwork + Send, S: SharedValueSource<Scalar>> MpcProver<'a, 't, 'g, N, S> {
     /// Create a new MpcProver with a custom network
     pub fn new_with_network(
         party_id: u64,
@@ -199,8 +199,8 @@ impl<'t, 'g, N: MpcNetwork + Send, S: SharedValueSource<Scalar>> MpcProver<'t, '
     }
 }
 
-impl<'t, 'g, N: MpcNetwork + Send, S: SharedValueSource<Scalar>> MpcConstraintSystem<N, S>
-    for MpcProver<'t, 'g, N, S>
+impl<'a, 't, 'g, N: MpcNetwork + Send, S: SharedValueSource<Scalar>> MpcConstraintSystem<'a, N, S>
+    for MpcProver<'a, 't, 'g, N, S>
 {
     /// Lease the transcript to the caller
     fn transcript(&mut self) -> &mut merlin::Transcript {
@@ -319,22 +319,22 @@ impl<'t, 'g, N: MpcNetwork + Send, S: SharedValueSource<Scalar>> MpcConstraintSy
     }
 }
 
-impl<'t, 'g, N: MpcNetwork + Send, S: SharedValueSource<Scalar>>
-    MpcRandomizableConstraintSystem<N, S> for MpcProver<'t, 'g, N, S>
+impl<'a, 't, 'g, N: MpcNetwork + Send, S: SharedValueSource<Scalar>>
+    MpcRandomizableConstraintSystem<'a, N, S> for MpcProver<'a, 't, 'g, N, S>
 {
-    type RandomizedCS = RandomizingMpcProver<'t, 'g, N, S>;
+    type RandomizedCS = RandomizingMpcProver<'a, 't, 'g, N, S>;
 
     fn specify_randomized_constraints<F>(&mut self, callback: F) -> Result<(), R1CSError>
     where
-        F: 'static + Fn(&mut Self::RandomizedCS) -> Result<(), R1CSError>,
+        F: 'a + Fn(&mut Self::RandomizedCS) -> Result<(), R1CSError>,
     {
         self.deferred_constraints.push(Box::new(callback));
         Ok(())
     }
 }
 
-impl<'t, 'g, N: MpcNetwork + Send, S: SharedValueSource<Scalar>> MpcConstraintSystem<N, S>
-    for RandomizingMpcProver<'t, 'g, N, S>
+impl<'a, 't, 'g, N: MpcNetwork + Send, S: SharedValueSource<Scalar>> MpcConstraintSystem<'a, N, S>
+    for RandomizingMpcProver<'a, 't, 'g, N, S>
 {
     fn transcript(&mut self) -> &mut Transcript {
         self.prover.transcript()
@@ -368,15 +368,15 @@ impl<'t, 'g, N: MpcNetwork + Send, S: SharedValueSource<Scalar>> MpcConstraintSy
     }
 }
 
-impl<'t, 'g, N: MpcNetwork + Send, S: SharedValueSource<Scalar>> MpcRandomizedConstraintSystem<N, S>
-    for RandomizingMpcProver<'t, 'g, N, S>
+impl<'a, 't, 'g, N: MpcNetwork + Send, S: SharedValueSource<Scalar>>
+    MpcRandomizedConstraintSystem<'a, N, S> for RandomizingMpcProver<'a, 't, 'g, N, S>
 {
     fn challenge_scalar(&mut self, label: &'static [u8]) -> Scalar {
         self.prover.transcript.challenge_scalar(label)
     }
 }
 
-impl<'t, 'g, N: MpcNetwork + Send, S: SharedValueSource<Scalar>> MpcProver<'t, 'g, N, S> {
+impl<'a, 't, 'g, N: MpcNetwork + Send, S: SharedValueSource<Scalar>> MpcProver<'a, 't, 'g, N, S> {
     /// Evaluate a linear combination of allocated variables
     fn eval(&self, lc: &MpcLinearCombination<N, S>) -> AuthenticatedScalar<N, S> {
         lc.terms.iter().fold(
