@@ -1,4 +1,4 @@
-//! Parses an R1CS file
+//! Defines sections of an R1CS file and parsing logic for each
 //! File format specification found here: https://github.com/iden3/r1csfile/blob/master/doc/r1cs_bin_format.md
 
 use std::io::{Read, Result};
@@ -266,19 +266,26 @@ impl ReadableWithHeader for LinearCombination {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct WireIdLabelMap {
     /// The mapping from wires (index) to label id (value)
-    wire_map: Vec<u64>,
+    mapping: Vec<u64>,
+}
+
+impl WireIdLabelMap {
+    #[allow(dead_code)]
+    fn get_label(&self, wire_id: usize) -> u64 {
+        self.mapping[wire_id]
+    }
 }
 
 impl ReadableWithHeader for WireIdLabelMap {
     type Output = Self;
 
     fn read<R: Read>(header: &HeaderSection, r: &mut R) -> Result<Self::Output> {
-        let mut wire_map = Vec::with_capacity(header.num_wires as usize);
+        let mut mapping = Vec::with_capacity(header.num_wires as usize);
         for _ in 0..header.num_wires {
-            wire_map.push(r.read_u64::<LittleEndian>()?);
+            mapping.push(r.read_u64::<LittleEndian>()?);
         }
 
-        Ok(Self { wire_map })
+        Ok(Self { mapping })
     }
 }
 
@@ -300,15 +307,63 @@ impl ReadableWithHeader for FieldElement {
     }
 }
 
+/// All tests here rely on the test.r1cs file which represents a cicruit with
+/// two private inputs; `a` and `b`, and one public input `c`. The circuit
+/// verifies that a * b == c
 #[cfg(test)]
 mod test {
     use std::{fs::File, io::Read};
 
-    use crate::parser::{HeaderSection, Metadata};
+    use num_bigint::BigUint;
 
-    use super::{Readable, SectionHeader, SectionType};
+    use super::{
+        Constraints, HeaderSection, Metadata, Readable, ReadableWithHeader, SectionHeader,
+        SectionType, WireIdLabelMap,
+    };
 
     const TEST_FILE: &str = "./resources/test.r1cs";
+
+    /**
+     * Helpers
+     */
+
+    /// Helper to find and parse the header of an R1CS file for tests that need
+    /// header information upfront
+    fn find_and_parse_header(file_name: &str) -> HeaderSection {
+        // Open the file, find the header section, and parse it
+        let mut test_file = File::open(file_name).unwrap();
+        find_section(SectionType::Header, &mut test_file);
+
+        HeaderSection::read(&mut test_file).unwrap()
+    }
+
+    /// Scan the file cursor through the binary until the given section type is found
+    fn find_section<R: Read>(section_type: SectionType, mut reader: R) {
+        // First read the metadata prelude
+        Metadata::read(&mut reader).unwrap();
+
+        // Loop over sections until correct type is found
+        let mut found = false;
+        while let Ok(section) = SectionHeader::read(&mut reader) {
+            // If the type matches the given section, stop reading and let the caller
+            // read through the upcoming section
+            if section.type_ == section_type {
+                found = true;
+                break;
+            } else {
+                // Otherwise, read through this section entirely
+                let mut buf = vec![0u8; section.size.try_into().unwrap()];
+                reader.read_exact(&mut buf).unwrap();
+                continue;
+            }
+        }
+
+        assert!(found, "find_section could not find: {:?}", section_type);
+    }
+
+    /**
+     * Tests
+     */
 
     #[test]
     fn test_parse_metadata() {
@@ -323,24 +378,8 @@ mod test {
 
     #[test]
     fn test_parse_header() {
-        let mut test_file = File::open(TEST_FILE).unwrap();
-        // Read the metadata
-        Metadata::read(&mut test_file).unwrap();
-
-        let mut header = None;
-        while let Ok(section) = SectionHeader::read(&mut test_file) {
-            if section.type_ == SectionType::Header {
-                header = Some(HeaderSection::read(&mut test_file).unwrap());
-            } else {
-                // Read through this section
-                let mut buf = vec![0u8; section.size.try_into().unwrap()];
-                test_file.read_exact(&mut buf).unwrap();
-                continue;
-            }
-        }
-
-        assert!(header.is_some());
-        let header = header.unwrap();
+        // Defer directly to the header helper
+        let header = find_and_parse_header(TEST_FILE);
 
         // Ground truth values determined by circom compiler output
         assert_eq!(header.num_public_inputs, 1);
@@ -350,5 +389,55 @@ mod test {
         assert_eq!(header.num_labels, 4);
         assert_eq!(header.num_wires, 4);
         assert_eq!(header.field_size, 32);
+    }
+
+    #[test]
+    fn test_parse_constraints() {
+        // Parse the header directly
+        let header = find_and_parse_header(TEST_FILE);
+
+        // Re-open the file and seek to the constraint section
+        let mut file = File::open(TEST_FILE).unwrap();
+        find_section(SectionType::Constraints, &mut file);
+
+        // Parse the constraint section of the file and verify contents
+        let constraint_section = Constraints::read(&header, &mut file).unwrap();
+
+        assert_eq!(constraint_section.constraints.len(), 1);
+        let constraint = &constraint_section.constraints[0];
+        assert_eq!(constraint.a_lc.len(), 1);
+        assert_eq!(constraint.b_lc.len(), 1);
+        assert_eq!(constraint.c_lc.len(), 1);
+
+        // Verify that the constraint represents w_1 * w_2 - w_3 = 0
+        // i.e. all coefficients are one and the wires are mapped correctly
+        // Wire 0 is mapped to a constant `1`, so wiring effectively starts at index 1
+        // Public values are wired before private, so wiring order is (c, a, b)
+        assert_eq!(constraint.c_lc[0].0, 1);
+        assert_eq!(constraint.a_lc[0].0, 2);
+        assert_eq!(constraint.b_lc[0].0, 3);
+
+        assert_eq!(constraint.a_lc[0].1, BigUint::from(1u64));
+        assert_eq!(constraint.b_lc[0].1, BigUint::from(1u64));
+        assert_eq!(constraint.c_lc[0].1, BigUint::from(1u64));
+    }
+
+    #[test]
+    fn test_wire_label_map() {
+        // Parse the header
+        let header = find_and_parse_header(TEST_FILE);
+
+        // Re-open the file and seek to the wire map section
+        let mut file = File::open(TEST_FILE).unwrap();
+        find_section(SectionType::WireMap, &mut file);
+
+        // Parse the wire map section and verify its contents
+        let wire_map = WireIdLabelMap::read(&header, &mut file).unwrap();
+
+        assert_eq!(wire_map.mapping.len(), 4);
+        assert_eq!(wire_map.get_label(0 /* wire_id */), 0);
+        assert_eq!(wire_map.get_label(1), 1);
+        assert_eq!(wire_map.get_label(2), 2);
+        assert_eq!(wire_map.get_label(3), 3);
     }
 }
