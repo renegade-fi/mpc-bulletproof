@@ -31,7 +31,7 @@ mod errors;
 mod generators;
 mod inner_product_proof;
 mod linear_proof;
-mod r1cs_file;
+pub mod r1cs_file;
 mod range_proof;
 mod transcript;
 

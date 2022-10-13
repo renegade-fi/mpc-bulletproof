@@ -1,13 +1,13 @@
 //! Defines sections of an R1CS file and parsing logic for each
 //! File format specification found here: https://github.com/iden3/r1csfile/blob/master/doc/r1cs_bin_format.md
 
-use std::io::{Read, Result};
+use std::io::{Error, ErrorKind, Read, Result, Write};
 
 use byteorder::{LittleEndian, ReadBytesExt};
 use num_bigint::BigUint;
 
 /// A type that implements readable is readable before a header has been found
-trait Readable {
+pub(crate) trait Readable {
     /// The output type, for maximum flexibility this is not necessarily Self
     type Output;
 
@@ -17,7 +17,7 @@ trait Readable {
 
 /// A type that implements ReadableWithHeader is readable after the header has
 /// been parsed from the file
-trait ReadableWithHeader {
+pub(crate) trait ReadableWithHeader {
     /// The output type, for maximum flexibility this is not necessarily Self
     type Output;
 
@@ -27,13 +27,13 @@ trait ReadableWithHeader {
 
 /// Represents metadata about the file that occurs once in the prelude
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct Metadata {
+pub(crate) struct Metadata {
     /// The parsed magic number, should be equal to `MAGIC`
-    _magic: u32,
+    pub(crate) _magic: u32,
     /// The parsed version number, should be 1 for our purposes
-    version: u32,
+    pub(crate) version: u32,
     /// The number of sections
-    num_sections: u32,
+    pub(crate) num_sections: u32,
 }
 
 impl Readable for Metadata {
@@ -59,8 +59,8 @@ impl Readable for Metadata {
 }
 
 /// Represents the type of a section that is in a header
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum SectionType {
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub(crate) enum SectionType {
     Header,
     Constraints,
     WireMap,
@@ -70,7 +70,7 @@ enum SectionType {
 }
 
 /// Convert via enum indexing
-impl<T: Into<u64>> From<T> for SectionType {
+impl<T: Into<u32>> From<T> for SectionType {
     fn from(input: T) -> Self {
         match input.into() {
             1 => Self::Header,
@@ -83,20 +83,49 @@ impl<T: Into<u64>> From<T> for SectionType {
     }
 }
 
+/// Convert back to u64 for writing
+impl TryInto<u32> for SectionType {
+    type Error = Error;
+
+    fn try_into(self) -> Result<u32> {
+        match self {
+            SectionType::Header => Ok(1),
+            SectionType::Constraints => Ok(2),
+            SectionType::WireMap => Ok(3),
+            SectionType::CustomGateList => Ok(4),
+            SectionType::CustomGateApplication => Ok(5),
+            SectionType::Undefined => {
+                Err(Error::new(ErrorKind::InvalidData, "undefined section type"))
+            }
+        }
+    }
+}
+
 impl Readable for SectionType {
     type Output = Self;
 
     fn read<R: Read>(r: &mut R) -> Result<Self::Output> {
         // 4 bytes for section type
-        Ok(Self::from(r.read_u32::<LittleEndian>()? as u64))
+        Ok(Self::from(r.read_u32::<LittleEndian>()?))
     }
 }
 
 /// Represents a section header, type + size
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct SectionHeader {
-    type_: SectionType,
-    size: u64,
+pub(crate) struct SectionHeader {
+    pub(crate) type_: SectionType,
+    pub(crate) size: u64,
+}
+
+impl SectionHeader {
+    pub(crate) fn write_to_buffer<W: Write>(&self, mut w: W) -> Result<usize> {
+        // Buffer self as bytes
+        let mut bytes_written = 0;
+        bytes_written += w.write(&TryInto::<u32>::try_into(self.type_)?.to_le_bytes())?;
+        bytes_written += w.write(&self.size.to_le_bytes())?;
+
+        Ok(bytes_written)
+    }
 }
 
 impl Readable for SectionHeader {
@@ -118,25 +147,25 @@ impl Readable for SectionHeader {
 
 /// Represents a header section in the R1CS spec
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct HeaderSection {
+pub(crate) struct HeaderSection {
     /// The number of bytes allocated to field elements
     /// should be multiple of 8
-    field_size: u32,
+    pub(crate) field_size: u32,
     /// The prime modulus of the constraint system's field
-    field_prime: BigUint,
+    pub(crate) field_prime: BigUint,
     /// The number of wires in the circuit
-    num_wires: u32,
+    pub(crate) num_wires: u32,
     /// The number of public outputs in the circuit
-    num_public_outputs: u32,
+    pub(crate) num_public_outputs: u32,
     /// The number of public inputs in the circuit
-    num_public_inputs: u32,
+    pub(crate) num_public_inputs: u32,
     /// The number of private inputs in the circuit
-    num_private_inputs: u32,
+    pub(crate) num_private_inputs: u32,
     /// The number of labels in the circuit
     /// Labels include public/private inputs and intermediate values
-    num_labels: u64,
+    pub(crate) num_labels: u64,
     /// The total number of constraints in the system
-    num_constraints: u32,
+    pub(crate) num_constraints: u32,
 }
 
 impl Readable for HeaderSection {
@@ -185,8 +214,8 @@ impl Readable for HeaderSection {
 
 /// Represents the constraints specification in an R1SC circuit
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct Constraints {
-    constraints: Vec<SingletonConstraint>,
+pub(crate) struct Constraints {
+    pub(crate) constraints: Vec<SingletonConstraint>,
 }
 
 impl ReadableWithHeader for Constraints {
@@ -210,13 +239,13 @@ impl ReadableWithHeader for Constraints {
 /// This structure directly represents the linear combinations that go into A, B, C
 /// In the form of lists of tuples: (wireID, coeff), where coeff is a field element
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct SingletonConstraint {
+pub(crate) struct SingletonConstraint {
     // The elements of the `A` linear combination
-    a_lc: Vec<(u32, BigUint)>,
+    pub(crate) a_lc: Vec<(u32, BigUint)>,
     // The elements of the `B` linear combination
-    b_lc: Vec<(u32, BigUint)>,
+    pub(crate) b_lc: Vec<(u32, BigUint)>,
     // The elements of the `C` linear combination
-    c_lc: Vec<(u32, BigUint)>,
+    pub(crate) c_lc: Vec<(u32, BigUint)>,
 }
 
 impl ReadableWithHeader for SingletonConstraint {
@@ -236,7 +265,7 @@ impl ReadableWithHeader for SingletonConstraint {
 /// The return type is Vec<(u32, BigUint)> representing pairs of
 /// (wireID, coefficient)
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct LinearCombination {}
+pub(crate) struct LinearCombination {}
 
 impl ReadableWithHeader for LinearCombination {
     type Output = Vec<(u32, BigUint)>;
@@ -264,14 +293,14 @@ impl ReadableWithHeader for LinearCombination {
 ///
 /// Each wireID is mapped to one label
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct WireIdLabelMap {
+pub(crate) struct WireIdLabelMap {
     /// The mapping from wires (index) to label id (value)
-    mapping: Vec<u64>,
+    pub(crate) mapping: Vec<u64>,
 }
 
 impl WireIdLabelMap {
     #[allow(dead_code)]
-    fn get_label(&self, wire_id: usize) -> u64 {
+    pub(crate) fn get_label(&self, wire_id: usize) -> u64 {
         self.mapping[wire_id]
     }
 }
@@ -291,8 +320,8 @@ impl ReadableWithHeader for WireIdLabelMap {
 
 /// Represents a single field element in the circuit
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct FieldElement {
-    value: BigUint,
+pub(crate) struct FieldElement {
+    pub(crate) value: BigUint,
 }
 
 impl ReadableWithHeader for FieldElement {
