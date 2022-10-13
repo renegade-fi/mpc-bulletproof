@@ -31,14 +31,15 @@ mod errors;
 mod generators;
 mod inner_product_proof;
 mod linear_proof;
+mod r1cs_file;
 mod range_proof;
 mod transcript;
 
 pub use crate::errors::ProofError;
 pub use crate::generators::{BulletproofGens, BulletproofGensShare, PedersenGens};
 pub use crate::linear_proof::LinearProof;
+pub use crate::r1cs_file::parser;
 pub use crate::range_proof::RangeProof;
-
 #[doc = include_str!("../docs/aggregation-api.md")]
 pub mod range_proof_mpc {
     pub use crate::errors::MPCError;
