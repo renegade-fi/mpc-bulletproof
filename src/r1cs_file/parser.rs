@@ -6,12 +6,23 @@ use std::io::{Read, Result};
 use byteorder::{LittleEndian, ReadBytesExt};
 use num_bigint::BigUint;
 
+/// A type that implements readable is readable before a header has been found
 trait Readable {
     /// The output type, for maximum flexibility this is not necessarily Self
     type Output;
 
     /// Read self from byte buffer
     fn read<R: Read>(r: &mut R) -> Result<Self::Output>;
+}
+
+/// A type that implements ReadableWithHeader is readable after the header has
+/// been parsed from the file
+trait ReadableWithHeader {
+    /// The output type, for maximum flexibility this is not necessarily Self
+    type Output;
+
+    /// Read self from byte buffer
+    fn read<R: Read>(header: &HeaderSection, r: &mut R) -> Result<Self::Output>;
 }
 
 /// Represents metadata about the file that occurs once in the prelude
@@ -174,7 +185,120 @@ impl Readable for HeaderSection {
 
 /// Represents the constraints specification in an R1SC circuit
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct Constraints {}
+struct Constraints {
+    constraints: Vec<SingletonConstraint>,
+}
+
+impl ReadableWithHeader for Constraints {
+    type Output = Self;
+
+    fn read<R: Read>(header: &HeaderSection, r: &mut R) -> Result<Self::Output> {
+        // Read in the constraints
+        let mut constraints = Vec::with_capacity(header.num_constraints as usize);
+        for _ in 0..header.num_constraints {
+            constraints.push(SingletonConstraint::read(header, r)?);
+        }
+
+        Ok(Self { constraints })
+    }
+}
+
+/// Represents a single constraint in the R1CS circuit
+///
+/// In R1CS, constraints are of the form:
+///     (\sum_{i=i}^n a_i * w_i) * (\sum_{i=1}^n b_i * w_i) - (\sum_{i=1}^n c_i * w_i) = 0
+/// This structure directly represents the linear combinations that go into A, B, C
+/// In the form of lists of tuples: (wireID, coeff), where coeff is a field element
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SingletonConstraint {
+    // The elements of the `A` linear combination
+    a_lc: Vec<(u32, BigUint)>,
+    // The elements of the `B` linear combination
+    b_lc: Vec<(u32, BigUint)>,
+    // The elements of the `C` linear combination
+    c_lc: Vec<(u32, BigUint)>,
+}
+
+impl ReadableWithHeader for SingletonConstraint {
+    type Output = Self;
+
+    fn read<R: Read>(header: &HeaderSection, r: &mut R) -> Result<Self::Output> {
+        // Read in the linear combination for `A`
+        Ok(Self {
+            a_lc: LinearCombination::read(header, r)?,
+            b_lc: LinearCombination::read(header, r)?,
+            c_lc: LinearCombination::read(header, r)?,
+        })
+    }
+}
+
+/// Represents a linear combination in an R1CS constraint
+/// The return type is Vec<(u32, BigUint)> representing pairs of
+/// (wireID, coefficient)
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LinearCombination {}
+
+impl ReadableWithHeader for LinearCombination {
+    type Output = Vec<(u32, BigUint)>;
+
+    fn read<R: Read>(header: &HeaderSection, r: &mut R) -> Result<Self::Output> {
+        // 4 bytes for the number of terms
+        let num_terms = r.read_u32::<LittleEndian>()?;
+
+        // Read in all the a constraints
+        let mut terms = Vec::with_capacity(num_terms as usize);
+        for _ in 0..num_terms {
+            // 4 bytes for the wireID
+            let wire_id = r.read_u32::<LittleEndian>()?;
+            // One field element for the coefficient
+            let coeff = FieldElement::read(header, r)?;
+
+            terms.push((wire_id, coeff))
+        }
+
+        Ok(terms)
+    }
+}
+
+/// Represents the Wire ID to label map of the circuit
+///
+/// Each wireID is mapped to one label
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct WireIdLabelMap {
+    /// The mapping from wires (index) to label id (value)
+    wire_map: Vec<u64>,
+}
+
+impl ReadableWithHeader for WireIdLabelMap {
+    type Output = Self;
+
+    fn read<R: Read>(header: &HeaderSection, r: &mut R) -> Result<Self::Output> {
+        let mut wire_map = Vec::with_capacity(header.num_wires as usize);
+        for _ in 0..header.num_wires {
+            wire_map.push(r.read_u64::<LittleEndian>()?);
+        }
+
+        Ok(Self { wire_map })
+    }
+}
+
+/// Represents a single field element in the circuit
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct FieldElement {
+    value: BigUint,
+}
+
+impl ReadableWithHeader for FieldElement {
+    type Output = BigUint;
+
+    fn read<R: Read>(header: &HeaderSection, r: &mut R) -> Result<Self::Output> {
+        // Input is of unknown size at compile time, buffer it
+        let mut felt_buf = vec![0u8; header.field_size as usize];
+        r.read_exact(&mut felt_buf)?;
+
+        Ok(BigUint::from_bytes_le(&felt_buf))
+    }
+}
 
 #[cfg(test)]
 mod test {
