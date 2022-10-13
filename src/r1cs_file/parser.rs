@@ -187,6 +187,17 @@ mod test {
     const TEST_FILE: &str = "./resources/test.r1cs";
 
     #[test]
+    fn test_parse_metadata() {
+        // Read in the metadata
+        let mut test_file = File::open(TEST_FILE).unwrap();
+        let md = Metadata::read(&mut test_file).unwrap();
+
+        assert_eq!(md._magic, u32::from_le_bytes(*b"r1cs"));
+        assert_eq!(md.num_sections, 3);
+        assert_eq!(md.version, 1);
+    }
+
+    #[test]
     fn test_parse_header() {
         let mut test_file = File::open(TEST_FILE).unwrap();
         // Read the metadata
