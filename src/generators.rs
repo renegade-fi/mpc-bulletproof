@@ -22,7 +22,7 @@ use mpc_ristretto::fabric::AuthenticatedMpcFabric;
 use mpc_ristretto::network::MpcNetwork;
 use sha3::{Sha3XofReader, Sha3_512, Shake256};
 
-use crate::r1cs_mpc::mpc_prover::SharedMpcFabric;
+use crate::r1cs_mpc::SharedMpcFabric;
 
 /// Represents a pair of base points for Pedersen commitments.
 ///

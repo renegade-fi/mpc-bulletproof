@@ -2,7 +2,7 @@
 
 use std::iter;
 
-use bulletproofs::{r1cs_mpc::mpc_inner_product::SharedInnerProductProof, util, BulletproofGens};
+use bulletproofs::{r1cs_mpc::SharedInnerProductProof, util, BulletproofGens};
 use curve25519_dalek::{ristretto::RistrettoPoint, scalar::Scalar};
 use merlin::Transcript;
 use mpc_ristretto::{

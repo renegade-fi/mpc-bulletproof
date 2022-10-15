@@ -1,5 +1,6 @@
 #![deny(missing_docs)]
 #![allow(non_snake_case)]
+#![allow(dead_code)]
 
 //! Groups the representation and arithmetic of polynomials over the field of
 //! `AuthenticatedScalar`s.

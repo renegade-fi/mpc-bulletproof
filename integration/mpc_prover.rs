@@ -7,12 +7,8 @@ use bulletproofs::{
         Variable, Verifier,
     },
     r1cs_mpc::{
-        mpc_constraint_system::{
-            MpcConstraintSystem, MpcRandomizableConstraintSystem, MpcRandomizedConstraintSystem,
-        },
-        mpc_linear_combination::MpcVariable,
-        mpc_prover::MpcProver,
-        proof::SharedR1CSProof,
+        MpcConstraintSystem, MpcProver, MpcRandomizableConstraintSystem,
+        MpcRandomizedConstraintSystem, MpcVariable, SharedR1CSProof,
     },
     BulletproofGens, PedersenGens,
 };

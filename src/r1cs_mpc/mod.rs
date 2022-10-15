@@ -1,6 +1,16 @@
-pub mod authenticated_poly;
-pub mod mpc_constraint_system;
-pub mod mpc_inner_product;
-pub mod mpc_linear_combination;
-pub mod mpc_prover;
-pub mod proof;
+mod authenticated_poly;
+mod mpc_constraint_system;
+mod mpc_inner_product;
+mod mpc_linear_combination;
+mod mpc_prover;
+mod proof;
+
+pub use self::mpc_constraint_system::{
+    MpcConstraintSystem, MpcRandomizableConstraintSystem, MpcRandomizedConstraintSystem,
+};
+pub use self::mpc_inner_product::SharedInnerProductProof;
+pub use self::mpc_linear_combination::{MpcLinearCombination, MpcVariable};
+pub use self::mpc_prover::MpcProver;
+pub(crate) use self::mpc_prover::SharedMpcFabric;
+pub use self::proof::SharedR1CSProof;
+pub use crate::errors::{MultiproverError, R1CSError};

@@ -347,6 +347,7 @@ impl<N: MpcNetwork + Send, S: SharedValueSource<Scalar>> SharedInnerProductProof
 ///    {\langle {\mathbf{a}}, {\mathbf{b}} \rangle} = \sum\_{i=0}^{n-1} a\_i \cdot b\_i.
 /// \\]
 /// Panics if the lengths of \\(\mathbf{a}\\) and \\(\mathbf{b}\\) are not equal.
+#[allow(dead_code)]
 pub fn inner_product(a: &[Scalar], b: &[Scalar]) -> Scalar {
     let mut out = Scalar::zero();
     if a.len() != b.len() {
