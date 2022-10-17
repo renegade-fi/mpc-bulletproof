@@ -7,7 +7,7 @@ use curve25519_dalek::scalar::Scalar;
 
 use merlin::Transcript;
 
-use bulletproofs::{BulletproofGens, PedersenGens, RangeProof};
+use mpc_bulletproof::{BulletproofGens, PedersenGens, RangeProof};
 
 // Tests that proofs generated with v1.0.0 continue to verify in later versions.
 #[test]

@@ -1,7 +1,8 @@
 #![allow(unused_doc_comments)]
 use std::iter;
 
-use bulletproofs::{
+use curve25519_dalek::scalar::Scalar;
+use mpc_bulletproof::{
     r1cs::{
         ConstraintSystem, R1CSError, RandomizableConstraintSystem, RandomizedConstraintSystem,
         Variable, Verifier,
@@ -12,7 +13,6 @@ use bulletproofs::{
     },
     BulletproofGens, PedersenGens,
 };
-use curve25519_dalek::scalar::Scalar;
 
 use itertools::Itertools;
 use merlin::Transcript;

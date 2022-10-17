@@ -2,9 +2,9 @@
 
 use std::iter;
 
-use bulletproofs::{r1cs_mpc::SharedInnerProductProof, util, BulletproofGens};
 use curve25519_dalek::{ristretto::RistrettoPoint, scalar::Scalar};
 use merlin::Transcript;
+use mpc_bulletproof::{r1cs_mpc::SharedInnerProductProof, util, BulletproofGens};
 use mpc_ristretto::{
     authenticated_ristretto::AuthenticatedRistretto,
     authenticated_scalar::AuthenticatedScalar,
