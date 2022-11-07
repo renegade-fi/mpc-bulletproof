@@ -87,6 +87,14 @@ impl SharedValueSource<Scalar> for PartyIDBeaverSource {
     fn next_shared_value(&mut self) -> Scalar {
         Scalar::from(self.party_id)
     }
+
+    fn next_shared_bit(&mut self) -> Scalar {
+        Scalar::from(self.party_id)
+    }
+
+    fn next_shared_inverse_pair(&mut self) -> (Scalar, Scalar) {
+        (Scalar::from(2u64), Scalar::from(2u64).invert())
+    }
 }
 
 #[allow(unused_doc_comments, clippy::await_holding_refcell_ref)]

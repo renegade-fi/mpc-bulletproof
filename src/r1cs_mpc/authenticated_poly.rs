@@ -371,14 +371,95 @@ mod tests {
     use core::cell::RefCell;
 
     use alloc::rc::Rc;
-    use mpc_ristretto::{
-        beaver::DummySharedScalarSource, fabric::AuthenticatedMpcFabric,
-        network::dummy_network::DummyMpcNetwork,
-    };
+    use async_trait::async_trait;
+    use curve25519_dalek::ristretto::RistrettoPoint;
+    use mpc_ristretto::{error::MpcNetworkError, fabric::AuthenticatedMpcFabric};
 
     use crate::inner_product_proof::inner_product;
 
     use super::*;
+
+    /// Mock Beaver source
+    #[derive(Debug, Default)]
+    pub struct DummySharedScalarSource;
+
+    impl DummySharedScalarSource {
+        pub fn new() -> Self {
+            Self
+        }
+    }
+
+    impl SharedValueSource<Scalar> for DummySharedScalarSource {
+        fn next_shared_bit(&mut self) -> Scalar {
+            Scalar::one()
+        }
+
+        fn next_shared_value(&mut self) -> Scalar {
+            Scalar::one()
+        }
+
+        fn next_shared_inverse_pair(&mut self) -> (Scalar, Scalar) {
+            (Scalar::one(), Scalar::one())
+        }
+
+        fn next_triplet(&mut self) -> (Scalar, Scalar, Scalar) {
+            (Scalar::one(), Scalar::one(), Scalar::one())
+        }
+    }
+
+    /// Mock MPC Network
+    #[derive(Clone, Debug)]
+    pub struct DummyMpcNetwork;
+    impl DummyMpcNetwork {
+        fn new() -> Self {
+            Self
+        }
+    }
+
+    #[async_trait]
+    impl MpcNetwork for DummyMpcNetwork {
+        /// Always return king
+        fn party_id(&self) -> u64 {
+            0
+        }
+
+        async fn send_scalars(&mut self, _: &[Scalar]) -> Result<(), MpcNetworkError> {
+            Ok(())
+        }
+
+        async fn receive_scalars(&mut self, _: usize) -> Result<Vec<Scalar>, MpcNetworkError> {
+            Ok(vec![])
+        }
+
+        async fn broadcast_points(
+            &mut self,
+            points: &[RistrettoPoint],
+        ) -> Result<Vec<RistrettoPoint>, MpcNetworkError> {
+            Ok(points.to_vec())
+        }
+
+        async fn send_points(&mut self, _: &[RistrettoPoint]) -> Result<(), MpcNetworkError> {
+            Ok(())
+        }
+
+        async fn receive_points(
+            &mut self,
+            _: usize,
+        ) -> Result<Vec<RistrettoPoint>, MpcNetworkError> {
+            Ok(vec![])
+        }
+
+        async fn broadcast_scalars(
+            &mut self,
+            scalars: &[Scalar],
+        ) -> Result<Vec<Scalar>, MpcNetworkError> {
+            Ok(scalars.to_vec())
+        }
+
+        async fn close(&mut self) -> Result<(), MpcNetworkError> {
+            Ok(())
+        }
+    }
 
     fn create_mock_fabric() -> SharedMpcFabric<DummyMpcNetwork, DummySharedScalarSource> {
         Rc::new(RefCell::new(AuthenticatedMpcFabric::new_with_network(

@@ -35,6 +35,8 @@ merlin = { version = "2", default-features = false }
 clear_on_drop = { version = "0.2", default-features = false, features = ["nightly"] }
 
 [dev-dependencies]
+async-std = "1.12"
+async-trait = "0.1"
 bincode = "1"
 clap = { version = "3.2.8", features = ["derive"] }
 colored = "2"
