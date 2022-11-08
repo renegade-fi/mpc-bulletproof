@@ -69,8 +69,8 @@ impl<'s, N: MpcNetwork + Send, S: SharedValueSource<Scalar>> SimpleCircuit<N, S>
     ) -> Result<(), R1CSError> {
         // Statment is (5 * a1 + 10 * a2) * (2 * b1 + 3 * b2) == 920
         let (_, _, mul_out) = cs.multiply(
-            Scalar::from(5u64) * &a[0] + Scalar::from(10u64) * &a[1],
-            Scalar::from(2u64) * &b[0] + Scalar::from(3u64) * &b[1],
+            &(Scalar::from(5u64) * &a[0] + Scalar::from(10u64) * &a[1]),
+            &(Scalar::from(2u64) * &b[0] + Scalar::from(3u64) * &b[1]),
         );
 
         cs.constrain(mul_out - expected_out);
@@ -414,15 +414,15 @@ impl<'a, N: MpcNetwork + Send + 'a, S: SharedValueSource<Scalar> + 'a> ShufflePr
         cs.specify_randomized_constraints(move |cs| {
             let z = cs.challenge_scalar(b"shuffle challenge");
 
-            let (_, _, last_mulx_out) = cs.multiply(&x[k - 1] - z, &x[k - 2] - z);
+            let (_, _, last_mulx_out) = cs.multiply(&(&x[k - 1] - z), &(&x[k - 2] - z));
             let first_mulx_out = (0..k - 2).rev().fold(last_mulx_out, |acc, i| {
-                let (_, _, o) = cs.multiply(acc.into(), &x[i] - z);
+                let (_, _, o) = cs.multiply(&acc.into(), &(&x[i] - z));
                 o
             });
 
-            let (_, _, last_muly_out) = cs.multiply(&y[k - 1] - z, &y[k - 2] - z);
+            let (_, _, last_muly_out) = cs.multiply(&(&y[k - 1] - z), &(&y[k - 2] - z));
             let first_muly_out = (0..k - 2).rev().fold(last_muly_out, |acc, i| {
-                let (_, _, o) = cs.multiply(acc.into(), &y[i] - z);
+                let (_, _, o) = cs.multiply(&acc.into(), &(&y[i] - z));
                 o
             });
 

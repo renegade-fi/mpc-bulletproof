@@ -328,6 +328,14 @@ pub struct MpcLinearCombination<N: MpcNetwork + Send, S: SharedValueSource<Scala
     pub(crate) terms: Vec<(MpcVariable<N, S>, AuthenticatedScalar<N, S>)>,
 }
 
+impl<N: MpcNetwork + Send, S: SharedValueSource<Scalar>> Clone for MpcLinearCombination<N, S> {
+    fn clone(&self) -> Self {
+        MpcLinearCombination {
+            terms: self.terms.clone(),
+        }
+    }
+}
+
 impl<N: MpcNetwork + Send, S: SharedValueSource<Scalar>> MpcLinearCombination<N, S> {
     pub fn from_scalar(scalar: Scalar, fabric: SharedMpcFabric<N, S>) -> Self {
         Self {

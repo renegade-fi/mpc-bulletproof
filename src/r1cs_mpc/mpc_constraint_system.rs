@@ -42,8 +42,8 @@ pub trait MpcConstraintSystem<'a, N: MpcNetwork + Send, S: SharedValueSource<Sca
     /// Returns `(left, right, out)` for use in further constraints.
     fn multiply(
         &mut self,
-        left: MpcLinearCombination<N, S>,
-        right: MpcLinearCombination<N, S>,
+        left: &MpcLinearCombination<N, S>,
+        right: &MpcLinearCombination<N, S>,
     ) -> (MpcVariable<N, S>, MpcVariable<N, S>, MpcVariable<N, S>);
 
     /// Allocate a single variable.

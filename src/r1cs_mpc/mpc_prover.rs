@@ -210,11 +210,11 @@ impl<'a, 't, 'g, N: MpcNetwork + Send, S: SharedValueSource<Scalar>> MpcConstrai
     #[allow(unused_variables)]
     fn multiply(
         &mut self,
-        mut left: MpcLinearCombination<N, S>,
-        mut right: MpcLinearCombination<N, S>,
+        left: &MpcLinearCombination<N, S>,
+        right: &MpcLinearCombination<N, S>,
     ) -> (MpcVariable<N, S>, MpcVariable<N, S>, MpcVariable<N, S>) {
-        let l = self.eval(&left);
-        let r = self.eval(&right);
+        let l = self.eval(left);
+        let r = self.eval(right);
         let o = &l * &r;
 
         // Create new variables for the results
@@ -237,13 +237,16 @@ impl<'a, 't, 'g, N: MpcNetwork + Send, S: SharedValueSource<Scalar>> MpcConstrai
         self.a_O.push(o);
 
         // Constrain the multiplication
-        left.terms
+        let mut left_constraints = left.clone();
+        left_constraints
+            .terms
             .push((l_var.clone(), -self.borrow_fabric().allocate_public_u64(1)));
-        right
+        let mut right_constraints = right.clone();
+        right_constraints
             .terms
             .push((r_var.clone(), -self.borrow_fabric().allocate_public_u64(1)));
-        self.constrain(left);
-        self.constrain(right);
+        self.constrain(left_constraints);
+        self.constrain(right_constraints);
 
         (l_var, r_var, o_var)
     }
@@ -342,8 +345,8 @@ impl<'a, 't, 'g, N: MpcNetwork + Send, S: SharedValueSource<Scalar>> MpcConstrai
 
     fn multiply(
         &mut self,
-        left: MpcLinearCombination<N, S>,
-        right: MpcLinearCombination<N, S>,
+        left: &MpcLinearCombination<N, S>,
+        right: &MpcLinearCombination<N, S>,
     ) -> (MpcVariable<N, S>, MpcVariable<N, S>, MpcVariable<N, S>) {
         self.prover.multiply(left, right)
     }
