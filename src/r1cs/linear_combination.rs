@@ -1,5 +1,6 @@
 //! Definition of linear combinations.
 
+use core::ops::{AddAssign, MulAssign, SubAssign};
 use curve25519_dalek::scalar::Scalar;
 use std::iter::FromIterator;
 use std::ops::{Add, Mul, Neg, Sub};
@@ -144,6 +145,12 @@ impl<L: Into<LinearCombination>> Add<L> for LinearCombination {
     }
 }
 
+impl<L: Into<LinearCombination>> AddAssign<L> for LinearCombination {
+    fn add_assign(&mut self, rhs: L) {
+        self.terms.extend(rhs.into().terms)
+    }
+}
+
 impl<L: Into<LinearCombination>> Sub<L> for LinearCombination {
     type Output = Self;
 
@@ -151,6 +158,13 @@ impl<L: Into<LinearCombination>> Sub<L> for LinearCombination {
         self.terms
             .extend(rhs.into().terms.iter().map(|(var, coeff)| (*var, -coeff)));
         LinearCombination { terms: self.terms }
+    }
+}
+
+impl<L: Into<LinearCombination>> SubAssign<L> for LinearCombination {
+    fn sub_assign(&mut self, rhs: L) {
+        self.terms
+            .extend(rhs.into().terms.iter().map(|(var, coeff)| (*var, -coeff)))
     }
 }
 
@@ -164,6 +178,14 @@ impl Mul<LinearCombination> for Scalar {
             .map(|(var, scalar)| (var, scalar * self))
             .collect();
         LinearCombination { terms: out_terms }
+    }
+}
+
+impl MulAssign<Scalar> for LinearCombination {
+    fn mul_assign(&mut self, rhs: Scalar) {
+        for term in self.terms.iter_mut() {
+            term.1 *= rhs
+        }
     }
 }
 
