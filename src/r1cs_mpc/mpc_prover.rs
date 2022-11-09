@@ -415,18 +415,32 @@ impl<'a, 't, 'g, N: MpcNetwork + Send, S: SharedValueSource<Scalar>> MpcProver<'
             .borrow_fabric()
             .allocate_private_scalar(owning_party, v_blinding)?;
 
+        // Commit to the shared values
+        self.commit_preshared(&shared_v, &shared_v_blinding)
+    }
+
+    /// Commit to a pre-shared value
+    ///
+    /// This assumes that parties call this method with their respective secret shares of the underlying
+    /// committed input.
+    #[allow(clippy::type_complexity)]
+    pub fn commit_preshared(
+        &mut self,
+        v: &AuthenticatedScalar<N, S>,
+        v_blinding: &AuthenticatedScalar<N, S>,
+    ) -> Result<(AuthenticatedCompressedRistretto<N, S>, MpcVariable<N, S>), MpcError> {
         // Commit to the input, open the commitment, and add the commitment to the transcript.
         let value_commit = self
             .pc_gens
-            .commit_shared(&shared_v, &shared_v_blinding)
+            .commit_shared(v, v_blinding)
             .open_and_authenticate()?
             .compress();
         self.transcript.append_point(b"V", &value_commit.value());
 
         // Add the value to the constraint system
         let i = self.v.len();
-        self.v.push(shared_v);
-        self.v_blinding.push(shared_v_blinding);
+        self.v.push(v.clone());
+        self.v_blinding.push(v_blinding.clone());
 
         Ok((
             value_commit,
@@ -491,10 +505,30 @@ impl<'a, 't, 'g, N: MpcNetwork + Send, S: SharedValueSource<Scalar>> MpcProver<'
         let shared_v = &shared_values[..v.len()];
         let shared_v_blinding = &shared_values[v.len()..];
 
+        // Commit to the shared inputs
+        self.batch_commit_preshared(shared_v, shared_v_blinding)
+    }
+
+    /// Commit to a batch of pre-shared values
+    ///
+    /// Assumes that the parties call this method on secret shares of the respective
+    /// inputs that are being committed to
+    #[allow(clippy::type_complexity)]
+    pub fn batch_commit_preshared(
+        &mut self,
+        v: &[AuthenticatedScalar<N, S>],
+        v_blinding: &[AuthenticatedScalar<N, S>],
+    ) -> Result<
+        (
+            Vec<AuthenticatedCompressedRistretto<N, S>>,
+            Vec<MpcVariable<N, S>>,
+        ),
+        MpcError,
+    > {
         // Create commitments and allocate variables
         let mut commitments: Vec<AuthenticatedRistretto<_, _>> = Vec::new();
         let mut variables: Vec<MpcVariable<N, S>> = Vec::new();
-        for (v, v_blinding) in shared_v.iter().zip(shared_v_blinding.iter()) {
+        for (v, v_blinding) in v.iter().zip(v_blinding.iter()) {
             // Build a shared Pedersen commitment to this input
             commitments.push(self.pc_gens.commit_shared(v, v_blinding));
 
