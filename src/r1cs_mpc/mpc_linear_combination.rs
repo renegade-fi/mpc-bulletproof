@@ -1,13 +1,14 @@
 //! Definition of linear combinations.
 
 use core::cell::Ref;
+use core::hash::Hash;
 use core::ops::{AddAssign, SubAssign};
 use curve25519_dalek::scalar::Scalar;
-use itertools::Itertools;
 use mpc_ristretto::authenticated_scalar::AuthenticatedScalar;
 use mpc_ristretto::beaver::SharedValueSource;
 use mpc_ristretto::fabric::AuthenticatedMpcFabric;
 use mpc_ristretto::network::MpcNetwork;
+use std::collections::HashMap;
 use std::iter::FromIterator;
 use std::ops::{Add, Mul, Neg, Sub};
 
@@ -22,6 +23,13 @@ pub struct MpcVariable<N: MpcNetwork + Send, S: SharedValueSource<Scalar>> {
     var_type: Variable,
     /// The underlying MPC fabric, for allocating
     fabric: SharedMpcFabric<N, S>,
+}
+
+/// In the hash implementation, ignore the MPC fabric
+impl<N: MpcNetwork + Send, S: SharedValueSource<Scalar>> Hash for MpcVariable<N, S> {
+    fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
+        Hash::hash(&self.var_type, state)
+    }
 }
 
 impl<N: MpcNetwork + Send, S: SharedValueSource<Scalar>> MpcVariable<N, S> {
@@ -73,7 +81,7 @@ impl<N: MpcNetwork + Send, S: SharedValueSource<Scalar>> From<MpcVariable<N, S>>
     fn from(v: MpcVariable<N, S>) -> MpcLinearCombination<N, S> {
         let coeff = v.borrow_fabric().allocate_public_u64(1);
         MpcLinearCombination {
-            terms: vec![(v, coeff)],
+            terms: HashMap::from([(v, coeff)]),
         }
     }
 }
@@ -84,7 +92,7 @@ impl<'a, N: MpcNetwork + Send, S: SharedValueSource<Scalar>> From<&'a MpcVariabl
     fn from(v: &'a MpcVariable<N, S>) -> Self {
         let coeff = v.borrow_fabric().allocate_public_u64(1);
         MpcLinearCombination {
-            terms: vec![(v.clone(), coeff)],
+            terms: HashMap::from([(v.clone(), coeff)]),
         }
     }
 }
@@ -154,7 +162,7 @@ impl<N: MpcNetwork + Send, Sh: SharedValueSource<Scalar>, S: Into<Scalar>> Mul<S
     fn mul(self, other: S) -> Self::Output {
         let coeff = self.borrow_fabric().allocate_public_scalar(other.into());
         MpcLinearCombination {
-            terms: vec![(self, coeff)],
+            terms: HashMap::from([(self, coeff)]),
         }
     }
 }
@@ -172,14 +180,10 @@ impl<N: MpcNetwork + Send, S: SharedValueSource<Scalar>> Add<MpcVariable<N, S>> 
     type Output = MpcLinearCombination<N, S>;
 
     fn add(self, other: MpcVariable<N, S>) -> Self::Output {
-        let self_scalar = other.borrow_fabric().allocate_public_scalar(self);
-        let one = other.borrow_fabric().allocate_public_scalar(Scalar::one());
-        MpcLinearCombination {
-            terms: vec![
-                (MpcVariable::one(other.fabric.clone()), self_scalar),
-                (other, one),
-            ],
-        }
+        let self_lc: MpcLinearCombination<N, S> =
+            MpcLinearCombination::from_scalar(self, other.fabric.clone());
+        let other_lc: MpcLinearCombination<N, S> = other.into();
+        self_lc + other_lc
     }
 }
 
@@ -199,10 +203,9 @@ impl<N: MpcNetwork + Send, S: SharedValueSource<Scalar>> Add<MpcVariable<N, S>>
     type Output = MpcLinearCombination<N, S>;
 
     fn add(self, other: MpcVariable<N, S>) -> Self::Output {
-        let one = other.borrow_fabric().allocate_public_scalar(Scalar::one());
-        MpcLinearCombination {
-            terms: vec![(MpcVariable::one(other.fabric.clone()), self), (other, one)],
-        }
+        let self_lc = MpcLinearCombination::from_authenticated_scalar(self, other.fabric.clone());
+        let other_lc: MpcLinearCombination<N, S> = other.into();
+        self_lc + other_lc
     }
 }
 
@@ -222,19 +225,12 @@ impl<'a, N: MpcNetwork + Send, S: SharedValueSource<Scalar>> Sub<Scalar> for &'a
     }
 }
 
+#[allow(clippy::suspicious_arithmetic_impl)]
 impl<N: MpcNetwork + Send, S: SharedValueSource<Scalar>> Sub<Scalar> for MpcVariable<N, S> {
     type Output = MpcLinearCombination<N, S>;
 
     fn sub(self, other: Scalar) -> Self::Output {
-        // let coeff = self.borrow_fabric().allocate_public_scalar(-other);
-        let self_scalar = self.borrow_fabric().allocate_public_u64(1);
-        let other_scalar = self.borrow_fabric().allocate_public_scalar(-other);
-        MpcLinearCombination {
-            terms: vec![
-                (MpcVariable::one(self.fabric.clone()), other_scalar),
-                (self, self_scalar),
-            ],
-        }
+        other.neg() + self
     }
 }
 
@@ -242,14 +238,7 @@ impl<N: MpcNetwork + Send, S: SharedValueSource<Scalar>> Sub<MpcVariable<N, S>> 
     type Output = MpcLinearCombination<N, S>;
 
     fn sub(self, other: MpcVariable<N, S>) -> Self::Output {
-        let self_scalar = other.borrow_fabric().allocate_public_scalar(self);
-        let negative_one = other.borrow_fabric().allocate_public_scalar(-Scalar::one());
-        MpcLinearCombination {
-            terms: vec![
-                (MpcVariable::one(other.fabric.clone()), self_scalar),
-                (other, negative_one),
-            ],
-        }
+        other - self
     }
 }
 
@@ -263,19 +252,16 @@ impl<'a, N: MpcNetwork + Send, S: SharedValueSource<Scalar>> Sub<&'a MpcVariable
     }
 }
 
+#[allow(clippy::suspicious_arithmetic_impl)]
 impl<N: MpcNetwork + Send, S: SharedValueSource<Scalar>> Sub<MpcVariable<N, S>>
     for AuthenticatedScalar<N, S>
 {
     type Output = MpcLinearCombination<N, S>;
 
     fn sub(self, other: MpcVariable<N, S>) -> Self::Output {
-        let negative_one = other.borrow_fabric().allocate_public_scalar(-Scalar::one());
-        MpcLinearCombination {
-            terms: vec![
-                (MpcVariable::one(other.fabric.clone()), self),
-                (other, negative_one),
-            ],
-        }
+        let self_lc = MpcLinearCombination::from_authenticated_scalar(self, other.fabric.clone());
+        let other_lc: MpcLinearCombination<N, S> = other.into();
+        self_lc + other_lc.neg()
     }
 }
 
@@ -293,7 +279,7 @@ impl<N: MpcNetwork + Send, S: SharedValueSource<Scalar>> Mul<MpcVariable<N, S>> 
     fn mul(self, other: MpcVariable<N, S>) -> Self::Output {
         let coeff = other.borrow_fabric().allocate_public_scalar(self);
         MpcLinearCombination {
-            terms: vec![(other, coeff)],
+            terms: HashMap::from([(other, coeff)]),
         }
     }
 }
@@ -315,7 +301,7 @@ impl<N: MpcNetwork + Send, S: SharedValueSource<Scalar>> Mul<MpcVariable<N, S>>
 
     fn mul(self, other: MpcVariable<N, S>) -> Self::Output {
         MpcLinearCombination {
-            terms: vec![(other, self)],
+            terms: HashMap::from([(other, self)]),
         }
     }
 }
@@ -325,7 +311,19 @@ impl<N: MpcNetwork + Send, S: SharedValueSource<Scalar>> Mul<MpcVariable<N, S>>
 /// `(MpcVariable, Scalar)` pair.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct MpcLinearCombination<N: MpcNetwork + Send, S: SharedValueSource<Scalar>> {
-    pub(crate) terms: Vec<(MpcVariable<N, S>, AuthenticatedScalar<N, S>)>,
+    pub(crate) terms: HashMap<MpcVariable<N, S>, AuthenticatedScalar<N, S>>,
+}
+
+impl<N: MpcNetwork + Send, S: SharedValueSource<Scalar>> MpcLinearCombination<N, S> {
+    /// Instead of exposing the underlying HashMap interface, this method allows a
+    /// caller to add a single term to the linear combination
+    pub fn add_term(&mut self, var: MpcVariable<N, S>, coeff: AuthenticatedScalar<N, S>) {
+        if let Some(existing_coeff) = self.terms.get(&var) {
+            self.terms.insert(var, existing_coeff + coeff);
+        } else {
+            self.terms.insert(var, coeff);
+        }
+    }
 }
 
 impl<N: MpcNetwork + Send, S: SharedValueSource<Scalar>> Clone for MpcLinearCombination<N, S> {
@@ -339,10 +337,19 @@ impl<N: MpcNetwork + Send, S: SharedValueSource<Scalar>> Clone for MpcLinearComb
 impl<N: MpcNetwork + Send, S: SharedValueSource<Scalar>> MpcLinearCombination<N, S> {
     pub fn from_scalar(scalar: Scalar, fabric: SharedMpcFabric<N, S>) -> Self {
         Self {
-            terms: vec![(
+            terms: HashMap::from([(
                 MpcVariable::one(fabric.clone()),
                 fabric.as_ref().borrow().allocate_public_scalar(scalar),
-            )],
+            )]),
+        }
+    }
+
+    pub fn from_authenticated_scalar(
+        scalar: AuthenticatedScalar<N, S>,
+        fabric: SharedMpcFabric<N, S>,
+    ) -> Self {
+        Self {
+            terms: HashMap::from([(MpcVariable::one(fabric), scalar)]),
         }
     }
 }
@@ -378,27 +385,6 @@ impl<N: MpcNetwork + Send, S: SharedValueSource<Scalar>>
     }
 }
 
-impl<'a, N: MpcNetwork + Send, S: SharedValueSource<Scalar>>
-    FromIterator<&'a (MpcVariable<N, S>, Scalar)> for MpcLinearCombination<N, S>
-{
-    fn from_iter<T>(iter: T) -> Self
-    where
-        T: IntoIterator<Item = &'a (MpcVariable<N, S>, Scalar)>,
-    {
-        MpcLinearCombination {
-            terms: iter
-                .into_iter()
-                .map(|(var, coeff)| {
-                    (
-                        var.clone(),
-                        var.borrow_fabric().allocate_public_scalar(*coeff),
-                    )
-                })
-                .collect::<Vec<(_, _)>>(),
-        }
-    }
-}
-
 impl<'a, N: 'a + MpcNetwork + Send, S: 'a + SharedValueSource<Scalar>>
     FromIterator<&'a (MpcVariable<N, S>, AuthenticatedScalar<N, S>)>
     for MpcLinearCombination<N, S>
@@ -421,13 +407,8 @@ impl<N: MpcNetwork + Send, S: SharedValueSource<Scalar>, L: Into<MpcLinearCombin
     type Output = Self;
 
     fn add(mut self, rhs: L) -> Self::Output {
-        self.terms.extend(
-            rhs.into()
-                .terms
-                .iter()
-                .map(|(var, coeff)| (var.clone(), coeff.clone())),
-        );
-        MpcLinearCombination { terms: self.terms }
+        self += rhs.into();
+        self
     }
 }
 
@@ -441,14 +422,9 @@ impl<
     type Output = MpcLinearCombination<N, S>;
 
     fn add(self, rhs: L) -> Self::Output {
-        MpcLinearCombination {
-            terms: self
-                .terms
-                .iter()
-                .cloned()
-                .chain(rhs.into().terms.into_iter())
-                .collect_vec(),
-        }
+        let mut self_clone = self.clone();
+        self_clone += rhs.into();
+        self_clone
     }
 }
 
@@ -456,38 +432,30 @@ impl<N: MpcNetwork + Send, S: SharedValueSource<Scalar>, L: Into<MpcLinearCombin
     AddAssign<L> for MpcLinearCombination<N, S>
 {
     fn add_assign(&mut self, rhs: L) {
-        self.terms.extend(rhs.into().terms)
+        for (var, coeff) in rhs.into().terms.iter() {
+            if let Some(lhs_value) = self.terms.get(var) {
+                self.terms.insert(var.clone(), lhs_value + coeff);
+            } else {
+                self.terms.insert(var.clone(), coeff.clone());
+            }
+        }
     }
 }
 
-impl<
-        'a,
-        N: MpcNetwork + Send,
-        S: SharedValueSource<Scalar>,
-        L: Into<MpcLinearCombination<N, S>>,
-    > AddAssign<L> for &'a mut MpcLinearCombination<N, S>
-{
-    fn add_assign(&mut self, rhs: L) {
-        self.terms.extend(rhs.into().terms)
-    }
-}
-
+#[allow(clippy::suspicious_arithmetic_impl)]
 impl<N: MpcNetwork + Send, S: SharedValueSource<Scalar>, L: Into<MpcLinearCombination<N, S>>> Sub<L>
     for MpcLinearCombination<N, S>
 {
     type Output = Self;
 
-    fn sub(mut self, rhs: L) -> Self::Output {
-        self.terms.extend(
-            rhs.into()
-                .terms
-                .iter()
-                .map(|(var, coeff)| (var.clone(), -coeff)),
-        );
-        MpcLinearCombination { terms: self.terms }
+    fn sub(self, rhs: L) -> Self::Output {
+        let mut self_clone = self;
+        self_clone += rhs.into().neg();
+        self_clone
     }
 }
 
+#[allow(clippy::suspicious_arithmetic_impl)]
 impl<
         'a,
         N: MpcNetwork + Send,
@@ -498,49 +466,18 @@ impl<
     type Output = MpcLinearCombination<N, S>;
 
     fn sub(self, rhs: L) -> Self::Output {
-        let terms = self
-            .terms
-            .iter()
-            .cloned()
-            .chain(
-                rhs.into()
-                    .terms
-                    .iter()
-                    .map(|(var, coeff)| (var.clone(), -coeff)),
-            )
-            .collect_vec();
-
-        Self::Output { terms }
+        let mut self_clone = self.clone();
+        self_clone += rhs.into().neg();
+        self_clone
     }
 }
 
+#[allow(clippy::suspicious_op_assign_impl)]
 impl<N: MpcNetwork + Send, S: SharedValueSource<Scalar>, L: Into<MpcLinearCombination<N, S>>>
     SubAssign<L> for MpcLinearCombination<N, S>
 {
     fn sub_assign(&mut self, rhs: L) {
-        self.terms.extend(
-            rhs.into()
-                .terms
-                .iter()
-                .map(|(var, coeff)| (var.clone(), -coeff)),
-        )
-    }
-}
-
-impl<
-        'a,
-        N: MpcNetwork + Send,
-        S: SharedValueSource<Scalar>,
-        L: Into<MpcLinearCombination<N, S>>,
-    > SubAssign<L> for &'a mut MpcLinearCombination<N, S>
-{
-    fn sub_assign(&mut self, rhs: L) {
-        self.terms.extend(
-            rhs.into()
-                .terms
-                .iter()
-                .map(|(var, coeff)| (var.clone(), -coeff)),
-        )
+        *self += rhs.into().neg();
     }
 }
 
@@ -565,12 +502,7 @@ impl<'a, N: MpcNetwork + Send, S: SharedValueSource<Scalar>> Mul<&'a MpcLinearCo
     type Output = MpcLinearCombination<N, S>;
 
     fn mul(self, rhs: &'a MpcLinearCombination<N, S>) -> Self::Output {
-        let terms = rhs
-            .terms
-            .iter()
-            .map(|(var, coeff)| (var.clone(), coeff * self))
-            .collect_vec();
-        MpcLinearCombination { terms }
+        self * rhs.clone()
     }
 }
 
@@ -595,12 +527,7 @@ impl<'a, N: MpcNetwork + Send, S: SharedValueSource<Scalar>> Mul<&'a MpcLinearCo
     type Output = MpcLinearCombination<N, S>;
 
     fn mul(self, rhs: &'a MpcLinearCombination<N, S>) -> Self::Output {
-        let terms = rhs
-            .terms
-            .iter()
-            .map(|(var, coeff)| (var.clone(), coeff * &self))
-            .collect_vec();
-        MpcLinearCombination { terms }
+        self * rhs.clone()
     }
 }
 
@@ -608,9 +535,11 @@ impl<N: MpcNetwork + Send, S: SharedValueSource<Scalar>> Neg for MpcLinearCombin
     type Output = Self;
 
     fn neg(mut self) -> Self::Output {
-        for (_, s) in self.terms.iter_mut() {
-            *s = -s.clone()
-        }
+        self.terms = self
+            .terms
+            .into_iter()
+            .map(|(var, coeff)| (var, coeff.neg()))
+            .collect();
         self
     }
 }
@@ -621,12 +550,7 @@ impl<'a, N: MpcNetwork + Send, S: SharedValueSource<Scalar>> Neg
     type Output = MpcLinearCombination<N, S>;
 
     fn neg(self) -> Self::Output {
-        let terms = self
-            .terms
-            .iter()
-            .map(|(var, coeff)| (var.clone(), coeff.neg()))
-            .collect_vec();
-        MpcLinearCombination { terms }
+        self.clone().neg()
     }
 }
 

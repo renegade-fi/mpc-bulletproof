@@ -238,13 +238,9 @@ impl<'a, 't, 'g, N: MpcNetwork + Send, S: SharedValueSource<Scalar>> MpcConstrai
 
         // Constrain the multiplication
         let mut left_constraints = left.clone();
-        left_constraints
-            .terms
-            .push((l_var.clone(), -self.borrow_fabric().allocate_public_u64(1)));
+        left_constraints.add_term(l_var.clone(), -self.borrow_fabric().allocate_public_u64(1));
         let mut right_constraints = right.clone();
-        right_constraints
-            .terms
-            .push((r_var.clone(), -self.borrow_fabric().allocate_public_u64(1)));
+        right_constraints.add_term(r_var.clone(), -self.borrow_fabric().allocate_public_u64(1));
         self.constrain(left_constraints);
         self.constrain(right_constraints);
 
