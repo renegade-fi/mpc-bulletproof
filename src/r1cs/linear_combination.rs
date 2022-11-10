@@ -2,11 +2,12 @@
 
 use core::ops::{AddAssign, MulAssign, SubAssign};
 use curve25519_dalek::scalar::Scalar;
+use std::collections::HashMap;
 use std::iter::FromIterator;
 use std::ops::{Add, Mul, Neg, Sub};
 
 /// Represents a variable in a constraint system.
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, Hash, PartialEq, Eq)]
 pub enum Variable {
     /// Represents an external input specified by a commitment.
     Committed(usize),
@@ -23,7 +24,7 @@ pub enum Variable {
 impl From<Variable> for LinearCombination {
     fn from(v: Variable) -> LinearCombination {
         LinearCombination {
-            terms: vec![(v, Scalar::one())],
+            terms: HashMap::from([(v, Scalar::one())]),
         }
     }
 }
@@ -31,7 +32,7 @@ impl From<Variable> for LinearCombination {
 impl<S: Into<Scalar>> From<S> for LinearCombination {
     fn from(s: S) -> LinearCombination {
         LinearCombination {
-            terms: vec![(Variable::One(), s.into())],
+            terms: HashMap::from([(Variable::One(), s.into())]),
         }
     }
 }
@@ -67,7 +68,7 @@ impl<S: Into<Scalar>> Mul<S> for Variable {
 
     fn mul(self, other: S) -> Self::Output {
         LinearCombination {
-            terms: vec![(self, other.into())],
+            terms: HashMap::from([(self, other.into())]),
         }
     }
 }
@@ -78,9 +79,10 @@ impl Add<Variable> for Scalar {
     type Output = LinearCombination;
 
     fn add(self, other: Variable) -> Self::Output {
-        LinearCombination {
-            terms: vec![(Variable::One(), self), (other, Scalar::one())],
-        }
+        // Cast both into linear combinations and merge them
+        let self_lc: LinearCombination = self.into();
+        let other_lc: LinearCombination = other.into();
+        self_lc + other_lc
     }
 }
 
@@ -88,9 +90,9 @@ impl Sub<Variable> for Scalar {
     type Output = LinearCombination;
 
     fn sub(self, other: Variable) -> Self::Output {
-        LinearCombination {
-            terms: vec![(Variable::One(), self), (other, -Scalar::one())],
-        }
+        let self_lc: LinearCombination = self.into();
+        let other_lc: LinearCombination = other.into();
+        self_lc - other_lc
     }
 }
 
@@ -99,7 +101,7 @@ impl Mul<Variable> for Scalar {
 
     fn mul(self, other: Variable) -> Self::Output {
         LinearCombination {
-            terms: vec![(other, self)],
+            terms: HashMap::from([(other, self)]),
         }
     }
 }
@@ -107,9 +109,24 @@ impl Mul<Variable> for Scalar {
 /// Represents a linear combination of
 /// [`Variables`](::r1cs::Variable).  Each term is represented by a
 /// `(Variable, Scalar)` pair.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default)]
 pub struct LinearCombination {
-    pub(crate) terms: Vec<(Variable, Scalar)>,
+    pub(crate) terms: HashMap<Variable, Scalar>,
+}
+
+impl LinearCombination {
+    /// Adds a full term, variable and coefficient
+    ///
+    /// We do not wish to expose the underlying hashmap abstraction,
+    /// so this method allows for what would be an `insert`, but with
+    /// the optimization that it adds keys which already exist
+    pub fn add_term(&mut self, var: Variable, coeff: Scalar) {
+        if let Some(existing_coeff) = self.terms.get(&var) {
+            self.terms.insert(var, coeff + existing_coeff);
+        } else {
+            self.terms.insert(var, coeff);
+        }
+    }
 }
 
 impl FromIterator<(Variable, Scalar)> for LinearCombination {
@@ -140,14 +157,23 @@ impl<L: Into<LinearCombination>> Add<L> for LinearCombination {
     type Output = Self;
 
     fn add(mut self, rhs: L) -> Self::Output {
-        self.terms.extend(rhs.into().terms.iter().cloned());
-        LinearCombination { terms: self.terms }
+        self += rhs.into();
+        self
     }
 }
 
 impl<L: Into<LinearCombination>> AddAssign<L> for LinearCombination {
     fn add_assign(&mut self, rhs: L) {
-        self.terms.extend(rhs.into().terms)
+        // For each term in the RHS, add it to the LHS linear combination.
+        // If a term involving the RHS variable already exists in the LHS,
+        // simply add their coefficients
+        for (var, coeff) in rhs.into().terms.iter() {
+            if let Some(lhs_value) = self.terms.get(var) {
+                self.terms.insert(*var, *lhs_value + *coeff);
+            } else {
+                self.terms.insert(*var, *coeff);
+            }
+        }
     }
 }
 
@@ -183,8 +209,8 @@ impl Mul<LinearCombination> for Scalar {
 
 impl MulAssign<Scalar> for LinearCombination {
     fn mul_assign(&mut self, rhs: Scalar) {
-        for term in self.terms.iter_mut() {
-            term.1 *= rhs
+        for (_, coeff) in self.terms.iter_mut() {
+            *coeff = *coeff * rhs
         }
     }
 }
@@ -194,7 +220,7 @@ impl Neg for LinearCombination {
 
     fn neg(mut self) -> Self::Output {
         for (_, s) in self.terms.iter_mut() {
-            *s = -*s
+            *s = s.neg()
         }
         self
     }

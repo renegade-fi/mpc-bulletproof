@@ -111,8 +111,8 @@ impl<'t, 'g> ConstraintSystem for Prover<'t, 'g> {
         self.a_O.push(o);
 
         // Constrain l,r,o:
-        left.terms.push((l_var, -Scalar::one()));
-        right.terms.push((r_var, -Scalar::one()));
+        left.add_term(l_var, -Scalar::one());
+        right.add_term(r_var, -Scalar::one());
         self.constrain(left);
         self.constrain(right);
 
