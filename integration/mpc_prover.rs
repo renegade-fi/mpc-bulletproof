@@ -183,7 +183,7 @@ impl<'s, N: MpcNetwork + Send, S: SharedValueSource<Scalar>> SimpleCircuit<N, S>
 
         // Build the verifier
         let mut verifier_transcript = Transcript::new(TRANSCRIPT_SEED.as_bytes());
-        let mut verifier = Verifier::new(&mut verifier_transcript);
+        let mut verifier = Verifier::new(pc_gens, &mut verifier_transcript);
 
         // Build commitments to the verifier inputs
         let a_input = opened_a_commit
@@ -202,7 +202,7 @@ impl<'s, N: MpcNetwork + Send, S: SharedValueSource<Scalar>> SimpleCircuit<N, S>
             .map_err(|err| format!("Error applying constraints to verifier: {:?}", err))?;
 
         verifier
-            .verify(&opened_proof, pc_gens, bp_gens)
+            .verify(&opened_proof, bp_gens)
             .map_err(|err| format!("Error verifying proof: {:?}", err))
     }
 }
@@ -304,7 +304,7 @@ fn test_r1cs_interleaved_witness(test_args: &IntegrationTestArgs) -> Result<(), 
 
     // Build a verifier
     let mut verifier_transcript = Transcript::new(TRANSCRIPT_SEED.as_bytes());
-    let mut verifier = Verifier::new(&mut verifier_transcript);
+    let mut verifier = Verifier::new(&pc_gens, &mut verifier_transcript);
 
     // Commit to the values in the verifier
     let verifier_party0_vars = party0_commit
@@ -355,7 +355,7 @@ fn test_r1cs_interleaved_witness(test_args: &IntegrationTestArgs) -> Result<(), 
     .map_err(|err| format!("Error specifying verifier constraints: {:?}", err))?;
 
     verifier
-        .verify(&proof, &pc_gens, &bp_gens)
+        .verify(&proof, &bp_gens)
         .map_err(|err| format!("Verification error: {:?}", err))
 }
 
@@ -547,7 +547,7 @@ impl<'a, N: MpcNetwork + Send + 'a, S: SharedValueSource<Scalar> + 'a> ShufflePr
 
         // Build the verifier
         let mut verifier_transcript = Transcript::new(TRANSCRIPT_SEED.as_bytes());
-        let mut verifier = Verifier::new(&mut verifier_transcript);
+        let mut verifier = Verifier::new(pc_gens, &mut verifier_transcript);
 
         // Commit to the inputs in the verifier
         let x_input = opened_x_commit
@@ -563,7 +563,7 @@ impl<'a, N: MpcNetwork + Send + 'a, S: SharedValueSource<Scalar> + 'a> ShufflePr
             .map_err(|err| format!("Error specifying constraints for verifier: {:?}", err))?;
 
         verifier
-            .verify(&opened_proof, pc_gens, bp_gens)
+            .verify(&opened_proof, bp_gens)
             .map_err(|err| format!("Error verifying proof: {:?}", err))
     }
 }

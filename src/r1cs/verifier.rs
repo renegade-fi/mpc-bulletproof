@@ -23,8 +23,9 @@ use crate::transcript::TranscriptProtocol;
 /// When all constraints are added, the verifying code calls `verify`
 /// which consumes the `Verifier` instance, samples random challenges
 /// that instantiate the randomized constraints, and verifies the proof.
-pub struct Verifier<'t> {
+pub struct Verifier<'t, 'g> {
     transcript: &'t mut Transcript,
+    pc_gens: &'g PedersenGens,
     constraints: Vec<LinearCombination>,
 
     /// Records the number of low-level variables allocated in the
@@ -42,7 +43,8 @@ pub struct Verifier<'t> {
     /// After that, the option will flip to None and additional calls to `randomize_constraints`
     /// will invoke closures immediately.
     #[allow(clippy::type_complexity)]
-    deferred_constraints: Vec<Box<dyn Fn(&mut RandomizingVerifier<'t>) -> Result<(), R1CSError>>>,
+    deferred_constraints:
+        Vec<Box<dyn Fn(&mut RandomizingVerifier<'t, 'g>) -> Result<(), R1CSError>>>,
 
     /// Index of a pending multiplier that's not fully assigned yet.
     pending_multiplier: Option<usize>,
@@ -55,11 +57,11 @@ pub struct Verifier<'t> {
 /// monomorphize the closures for the proving and verifying code.
 /// However, this type cannot be instantiated by the user and therefore can only be used within
 /// the callback provided to `specify_randomized_constraints`.
-pub struct RandomizingVerifier<'t> {
-    verifier: Verifier<'t>,
+pub struct RandomizingVerifier<'t, 'g> {
+    verifier: Verifier<'t, 'g>,
 }
 
-impl<'t> ConstraintSystem for Verifier<'t> {
+impl<'t, 'g> ConstraintSystem for Verifier<'t, 'g> {
     fn transcript(&mut self) -> &mut Transcript {
         self.transcript
     }
@@ -128,8 +130,8 @@ impl<'t> ConstraintSystem for Verifier<'t> {
     }
 }
 
-impl<'t> RandomizableConstraintSystem for Verifier<'t> {
-    type RandomizedCS = RandomizingVerifier<'t>;
+impl<'t, 'g> RandomizableConstraintSystem for Verifier<'t, 'g> {
+    type RandomizedCS = RandomizingVerifier<'t, 'g>;
 
     fn specify_randomized_constraints<F>(&mut self, callback: F) -> Result<(), R1CSError>
     where
@@ -140,7 +142,7 @@ impl<'t> RandomizableConstraintSystem for Verifier<'t> {
     }
 }
 
-impl<'t> ConstraintSystem for RandomizingVerifier<'t> {
+impl<'t, 'g> ConstraintSystem for RandomizingVerifier<'t, 'g> {
     fn transcript(&mut self) -> &mut Transcript {
         self.verifier.transcript
     }
@@ -173,13 +175,13 @@ impl<'t> ConstraintSystem for RandomizingVerifier<'t> {
     }
 }
 
-impl<'t> RandomizedConstraintSystem for RandomizingVerifier<'t> {
+impl<'t, 'g> RandomizedConstraintSystem for RandomizingVerifier<'t, 'g> {
     fn challenge_scalar(&mut self, label: &'static [u8]) -> Scalar {
         self.verifier.transcript.challenge_scalar(label)
     }
 }
 
-impl<'t> Verifier<'t> {
+impl<'t, 'g> Verifier<'t, 'g> {
     /// Construct an empty constraint system with specified external
     /// input variables.
     ///
@@ -205,11 +207,12 @@ impl<'t> Verifier<'t> {
     ///
     /// The second element is a list of [`Variable`]s corresponding to
     /// the external inputs, which can be used to form constraints.
-    pub fn new(transcript: &'t mut Transcript) -> Self {
+    pub fn new(pc_gens: &'g PedersenGens, transcript: &'t mut Transcript) -> Self {
         transcript.r1cs_domain_sep();
 
         Verifier {
             transcript,
+            pc_gens,
             num_vars: 0,
             V: Vec::new(),
             constraints: Vec::new(),
@@ -240,6 +243,33 @@ impl<'t> Verifier<'t> {
         self.transcript.append_point(b"V", &commitment);
 
         Variable::Committed(i)
+    }
+
+    /// Creates a commitment to a public input (also referred to as a "statement variable")
+    ///
+    /// This commitment interface (unlike above) allows the verifier to input the
+    /// value to be committed, as opposed to simply recording the value committed to by
+    /// the prover. We provide this interface to allow the verifier to specify the public
+    /// variables to the proof, a necessary step to ensure the validity of the *correct*
+    /// statement.
+    ///
+    /// # Inputs
+    ///
+    /// The value to be committed by the verifier, as a Scalar. This value should (as above)
+    /// be passed upfront, so that its commitment can be recorded in the Fiat-Shamir
+    /// transcript.
+    ///
+    /// # Returns
+    ///
+    /// Returns a `Variable` that can be used to refer to this commited value in constraint
+    /// generation.
+    pub fn commit_public(&mut self, value: Scalar) -> Variable {
+        // Generate a pedersen commitment to the value
+        let blinding_factor = Scalar::one();
+        let commitment = self.pc_gens.commit(value, blinding_factor);
+
+        // Forward the commitment to the existing method for ingesting pre-committed values
+        self.commit(commitment.compress())
     }
 
     /// Use a challenge, `z`, to flatten the constraints in the
@@ -326,12 +356,7 @@ impl<'t> Verifier<'t> {
     /// [`BulletproofGens`] should have `gens_capacity` greater than
     /// the number of multiplication constraints that will eventually
     /// be added into the constraint system.
-    pub fn verify(
-        mut self,
-        proof: &R1CSProof,
-        pc_gens: &PedersenGens,
-        bp_gens: &BulletproofGens,
-    ) -> Result<(), R1CSError> {
+    pub fn verify(mut self, proof: &R1CSProof, bp_gens: &BulletproofGens) -> Result<(), R1CSError> {
         // Commit a length _suffix_ for the number of high-level variables.
         // We cannot do this in advance because user can commit variables one-by-one,
         // but this suffix provides safe disambiguation because each variable
@@ -481,8 +506,8 @@ impl<'t> Verifier<'t> {
                 .chain(iter::once(proof.S2.decompress()))
                 .chain(self.V.iter().map(|V_i| V_i.decompress()))
                 .chain(T_points.iter().map(|T_i| T_i.decompress()))
-                .chain(iter::once(Some(pc_gens.B)))
-                .chain(iter::once(Some(pc_gens.B_blinding)))
+                .chain(iter::once(Some(self.pc_gens.B)))
+                .chain(iter::once(Some(self.pc_gens.B_blinding)))
                 .chain(gens.G(padded_n).map(|&G_i| Some(G_i)))
                 .chain(gens.H(padded_n).map(|&H_i| Some(H_i)))
                 .chain(proof.ipp_proof.L_vec.iter().map(|L_i| L_i.decompress()))
