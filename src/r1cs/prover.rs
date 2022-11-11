@@ -288,6 +288,14 @@ impl<'t, 'g> Prover<'t, 'g> {
         (V, Variable::Committed(i))
     }
 
+    /// Creates a commitment to a public (statement) variable. We do not blind these
+    /// commitments as their values are assumed to be public. Instead, we use a constant
+    /// "blinding" factor of one to ensure that the verifier can mimic the commitment
+    /// when it goes to verify the proof.
+    pub fn commit_public(&mut self, v: Scalar) -> (CompressedRistretto, Variable) {
+        self.commit(v, Scalar::one())
+    }
+
     /// Use a challenge, `z`, to flatten the constraints in the
     /// constraint system into vectors used for proving and
     /// verification.
