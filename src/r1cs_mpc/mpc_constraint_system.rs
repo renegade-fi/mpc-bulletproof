@@ -20,7 +20,7 @@ use super::mpc_linear_combination::{MpcLinearCombination, MpcVariable};
 /// verifier, gadgets for the constraint system should be written
 /// using the `ConstraintSystem` trait, so that the prover and
 /// verifier share the logic for specifying constraints.
-pub trait MpcConstraintSystem<'a, N: MpcNetwork + Send, S: SharedValueSource<Scalar>> {
+pub trait MpcConstraintSystem<'a, N: 'a + MpcNetwork + Send, S: 'a + SharedValueSource<Scalar>> {
     /// Leases the proof transcript to the user, so they can
     /// add extra data to which the proof must be bound, but which
     /// is not available before creation of the constraint system.
@@ -86,8 +86,11 @@ pub trait MpcConstraintSystem<'a, N: MpcNetwork + Send, S: SharedValueSource<Sca
 /// while gadgets that need randomization should use trait bound `CS: RandomizedConstraintSystem`.
 /// Gadgets generally _should not_ use this trait as a bound on the CS argument: it should be used
 /// by the higher-order protocol that composes gadgets together.
-pub trait MpcRandomizableConstraintSystem<'a, N: MpcNetwork + Send, S: SharedValueSource<Scalar>>:
-    MpcConstraintSystem<'a, N, S>
+pub trait MpcRandomizableConstraintSystem<
+    'a,
+    N: 'a + MpcNetwork + Send,
+    S: 'a + SharedValueSource<Scalar>,
+>: MpcConstraintSystem<'a, N, S>
 {
     /// Represents a concrete type for the CS in a randomization phase.
     type RandomizedCS: MpcRandomizedConstraintSystem<'a, N, S>;
@@ -121,8 +124,11 @@ pub trait MpcRandomizableConstraintSystem<'a, N: MpcNetwork + Send, S: SharedVal
 ///
 /// Note: this trait also includes `ConstraintSystem` trait
 /// in order to allow composition of gadgets: e.g. a shuffle gadget can be used in both phases.
-pub trait MpcRandomizedConstraintSystem<'a, N: MpcNetwork + Send, S: SharedValueSource<Scalar>>:
-    MpcConstraintSystem<'a, N, S>
+pub trait MpcRandomizedConstraintSystem<
+    'a,
+    N: 'a + MpcNetwork + Send,
+    S: 'a + SharedValueSource<Scalar>,
+>: MpcConstraintSystem<'a, N, S>
 {
     /// Generates a challenge scalar.
     ///

@@ -59,9 +59,9 @@ impl<'a, T: RngCore + CryptoRng> Iterator for RandomScalarGenerator<'a, T> {
 /// Result is `c`
 struct SimpleCircuit<N: MpcNetwork + Send, S: SharedValueSource<Scalar>>(SharedR1CSProof<N, S>);
 
-impl<'s, N: MpcNetwork + Send, S: SharedValueSource<Scalar>> SimpleCircuit<N, S> {
+impl<'a, N: 'a + MpcNetwork + Send, S: 'a + SharedValueSource<Scalar>> SimpleCircuit<N, S> {
     /// Gadget that applies constraints to the constraint system
-    fn gadget<CS: MpcRandomizableConstraintSystem<'s, N, S>>(
+    fn gadget<CS: MpcRandomizableConstraintSystem<'a, N, S>>(
         cs: &mut CS,
         a: Vec<MpcVariable<N, S>>,
         b: Vec<MpcVariable<N, S>>,
@@ -97,9 +97,9 @@ impl<'s, N: MpcNetwork + Send, S: SharedValueSource<Scalar>> SimpleCircuit<N, S>
 
     /// Create a bulletproof fo the statement specified by `gadget`
     #[allow(clippy::type_complexity)]
-    pub fn prove<'a>(
-        pc_gens: &'a PedersenGens,
-        bp_gens: &'a BulletproofGens,
+    pub fn prove<'b>(
+        pc_gens: &'b PedersenGens,
+        bp_gens: &'b BulletproofGens,
         a: &[Scalar],
         b: &[Scalar],
         expected_out: Scalar,
@@ -153,10 +153,10 @@ impl<'s, N: MpcNetwork + Send, S: SharedValueSource<Scalar>> SimpleCircuit<N, S>
     }
 
     /// Verify a proof of the execution
-    pub fn verify<'a>(
+    pub fn verify<'b>(
         &self,
-        pc_gens: &'a PedersenGens,
-        bp_gens: &'a BulletproofGens,
+        pc_gens: &'b PedersenGens,
+        bp_gens: &'b BulletproofGens,
         a_commit: &Vec<AuthenticatedCompressedRistretto<N, S>>,
         b_commit: &Vec<AuthenticatedCompressedRistretto<N, S>>,
         c_commit: &AuthenticatedCompressedRistretto<N, S>,
@@ -394,15 +394,12 @@ fn test_r1cs_proof_malleability(test_args: &IntegrationTestArgs) -> Result<(), S
 /// A shuffle proof proves that `x` is a permutation of `y`
 pub struct ShuffleProof<N: MpcNetwork + Send, S: SharedValueSource<Scalar>>(SharedR1CSProof<N, S>);
 
-impl<'a, N: MpcNetwork + Send + 'a, S: SharedValueSource<Scalar> + 'a> ShuffleProof<N, S> {
+impl<'a, N: 'a + MpcNetwork + Send, S: 'a + SharedValueSource<Scalar>> ShuffleProof<N, S> {
     fn gadget<'b, CS: MpcRandomizableConstraintSystem<'a, N, S>>(
         cs: &'b mut CS,
         x: Vec<MpcVariable<N, S>>,
         y: Vec<MpcVariable<N, S>>,
-    ) -> Result<(), String>
-    where
-        'a: 'b,
-    {
+    ) -> Result<(), String> {
         assert_eq!(x.len(), y.len());
         let k = x.len();
 

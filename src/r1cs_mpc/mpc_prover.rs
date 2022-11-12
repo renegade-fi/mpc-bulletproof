@@ -199,8 +199,8 @@ impl<'a, 't, 'g, N: MpcNetwork + Send, S: SharedValueSource<Scalar>> MpcProver<'
     }
 }
 
-impl<'a, 't, 'g, N: MpcNetwork + Send, S: SharedValueSource<Scalar>> MpcConstraintSystem<'a, N, S>
-    for MpcProver<'a, 't, 'g, N, S>
+impl<'a, 't, 'g, N: 'a + MpcNetwork + Send, S: 'a + SharedValueSource<Scalar>>
+    MpcConstraintSystem<'a, N, S> for MpcProver<'a, 't, 'g, N, S>
 {
     /// Lease the transcript to the caller
     fn transcript(&mut self) -> &mut merlin::Transcript {
@@ -318,7 +318,7 @@ impl<'a, 't, 'g, N: MpcNetwork + Send, S: SharedValueSource<Scalar>> MpcConstrai
     }
 }
 
-impl<'a, 't, 'g, N: MpcNetwork + Send, S: SharedValueSource<Scalar>>
+impl<'a, 't, 'g, N: 'a + MpcNetwork + Send, S: 'a + SharedValueSource<Scalar>>
     MpcRandomizableConstraintSystem<'a, N, S> for MpcProver<'a, 't, 'g, N, S>
 {
     type RandomizedCS = RandomizingMpcProver<'a, 't, 'g, N, S>;
@@ -332,8 +332,8 @@ impl<'a, 't, 'g, N: MpcNetwork + Send, S: SharedValueSource<Scalar>>
     }
 }
 
-impl<'a, 't, 'g, N: MpcNetwork + Send, S: SharedValueSource<Scalar>> MpcConstraintSystem<'a, N, S>
-    for RandomizingMpcProver<'a, 't, 'g, N, S>
+impl<'a, 't, 'g, N: 'a + MpcNetwork + Send, S: 'a + SharedValueSource<Scalar>>
+    MpcConstraintSystem<'a, N, S> for RandomizingMpcProver<'a, 't, 'g, N, S>
 {
     fn transcript(&mut self) -> &mut Transcript {
         self.prover.transcript()
@@ -367,7 +367,7 @@ impl<'a, 't, 'g, N: MpcNetwork + Send, S: SharedValueSource<Scalar>> MpcConstrai
     }
 }
 
-impl<'a, 't, 'g, N: MpcNetwork + Send, S: SharedValueSource<Scalar>>
+impl<'a, 't, 'g, N: 'a + MpcNetwork + Send, S: 'a + SharedValueSource<Scalar>>
     MpcRandomizedConstraintSystem<'a, N, S> for RandomizingMpcProver<'a, 't, 'g, N, S>
 {
     fn challenge_scalar(&mut self, label: &'static [u8]) -> Scalar {
