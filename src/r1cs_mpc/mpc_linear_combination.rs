@@ -309,9 +309,17 @@ impl<N: MpcNetwork + Send, S: SharedValueSource<Scalar>> Mul<MpcVariable<N, S>>
 /// Represents a linear combination of
 /// [`MpcVariables`](::r1cs::MpcVariable).  Each term is represented by a
 /// `(MpcVariable, Scalar)` pair.
-#[derive(Debug, Default, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct MpcLinearCombination<N: MpcNetwork + Send, S: SharedValueSource<Scalar>> {
     pub(crate) terms: HashMap<MpcVariable<N, S>, AuthenticatedScalar<N, S>>,
+}
+
+impl<N: MpcNetwork + Send, S: SharedValueSource<Scalar>> Default for MpcLinearCombination<N, S> {
+    fn default() -> Self {
+        Self {
+            terms: HashMap::new(),
+        }
+    }
 }
 
 impl<N: MpcNetwork + Send, S: SharedValueSource<Scalar>> MpcLinearCombination<N, S> {
