@@ -451,11 +451,10 @@ impl<'a, 't, 'g, N: MpcNetwork + Send, S: SharedValueSource<Scalar>> MpcProver<'
     pub fn commit_public(
         &mut self,
         v: Scalar,
-        v_blinding: Scalar,
     ) -> (AuthenticatedCompressedRistretto<N, S>, MpcVariable<N, S>) {
         // Allocate the value in the MPC network
         let network_v = self.borrow_fabric().allocate_public_scalar(v);
-        let network_v_blinding = self.borrow_fabric().allocate_public_scalar(v_blinding);
+        let network_v_blinding = self.borrow_fabric().allocate_public_scalar(Scalar::one());
 
         // Commit and add the commitment to the transcript
         // No need to open the commitment, it is assumed to be a public value
@@ -555,6 +554,20 @@ impl<'a, 't, 'g, N: MpcNetwork + Send, S: SharedValueSource<Scalar>> MpcProver<'
                 .collect_vec(),
             variables,
         ))
+    }
+
+    /// Commit to a batch of public values
+    ///
+    /// Assumes that all parties call this method with the same value
+    #[allow(clippy::type_complexity)]
+    pub fn batch_commit_public(
+        &mut self,
+        values: &[Scalar],
+    ) -> (
+        Vec<AuthenticatedCompressedRistretto<N, S>>,
+        Vec<MpcVariable<N, S>>,
+    ) {
+        values.iter().map(|val| self.commit_public(*val)).unzip()
     }
 
     /// Use a challenge, `z`, to flatten the constraints in the
