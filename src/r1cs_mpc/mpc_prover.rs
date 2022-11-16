@@ -489,6 +489,11 @@ impl<'a, 't, 'g, N: MpcNetwork + Send, S: SharedValueSource<Scalar>> MpcProver<'
         ),
         MpcError,
     > {
+        assert_eq!(
+            v.len(),
+            v_blinding.len(),
+            "values and blinders must have equal length"
+        );
         let shared_values = self.borrow_fabric().batch_allocate_private_scalars(
             owning_party,
             &v.iter()
@@ -520,6 +525,12 @@ impl<'a, 't, 'g, N: MpcNetwork + Send, S: SharedValueSource<Scalar>> MpcProver<'
         ),
         MpcError,
     > {
+        assert_eq!(
+            v.len(),
+            v_blinding.len(),
+            "values and blinders must have equal length"
+        );
+
         // Create commitments and allocate variables
         let mut commitments: Vec<AuthenticatedRistretto<_, _>> = Vec::new();
         let mut variables: Vec<MpcVariable<N, S>> = Vec::new();
