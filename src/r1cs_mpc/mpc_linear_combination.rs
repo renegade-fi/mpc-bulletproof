@@ -1,6 +1,7 @@
 //! Definition of linear combinations.
 
 use core::cell::Ref;
+use core::fmt::{Debug, Formatter, Result};
 use core::hash::Hash;
 use core::ops::{AddAssign, SubAssign};
 use curve25519_dalek::scalar::Scalar;
@@ -17,12 +18,17 @@ use crate::r1cs::Variable;
 use super::mpc_prover::SharedMpcFabric;
 
 /// Represents a variable in a constraint system.
-#[derive(Debug)]
 pub struct MpcVariable<N: MpcNetwork + Send, S: SharedValueSource<Scalar>> {
     /// The type of variable this repsents in the CS
     var_type: Variable,
     /// The underlying MPC fabric, for allocating
     fabric: SharedMpcFabric<N, S>,
+}
+
+impl<N: MpcNetwork + Send, S: SharedValueSource<Scalar>> Debug for MpcVariable<N, S> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result {
+        self.var_type.fmt(f)
+    }
 }
 
 /// In the hash implementation, ignore the MPC fabric
