@@ -73,7 +73,7 @@ impl<N: MpcNetwork + Send, S: SharedValueSource<Scalar>> MpcVariable<N, S> {
     }
 
     /// Create an MpcVariable representing 1
-    fn one(fabric: SharedMpcFabric<N, S>) -> Self {
+    pub fn one(fabric: SharedMpcFabric<N, S>) -> Self {
         MpcVariable {
             fabric,
             var_type: Variable::One(),
