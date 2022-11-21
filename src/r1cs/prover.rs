@@ -168,6 +168,22 @@ impl<'t, 'g> ConstraintSystem for Prover<'t, 'g> {
         // (e.g. that variables are valid, that the linear combination evals to 0 for prover, etc).
         self.constraints.push(lc);
     }
+
+    fn eval(&self, lc: &LinearCombination) -> Scalar {
+        lc.terms
+            .iter()
+            .map(|(var, coeff)| {
+                coeff
+                    * match var {
+                        Variable::MultiplierLeft(i) => self.a_L[*i],
+                        Variable::MultiplierRight(i) => self.a_R[*i],
+                        Variable::MultiplierOutput(i) => self.a_O[*i],
+                        Variable::Committed(i) => self.v[*i],
+                        Variable::One() => Scalar::one(),
+                    }
+            })
+            .sum()
+    }
 }
 
 impl<'t, 'g> RandomizableConstraintSystem for Prover<'t, 'g> {
@@ -212,6 +228,10 @@ impl<'t, 'g> ConstraintSystem for RandomizingProver<'t, 'g> {
 
     fn constrain(&mut self, lc: LinearCombination) {
         self.prover.constrain(lc)
+    }
+
+    fn eval(&self, lc: &LinearCombination) -> Scalar {
+        self.prover.eval(lc)
     }
 }
 
@@ -344,22 +364,6 @@ impl<'t, 'g> Prover<'t, 'g> {
         }
 
         (wL, wR, wO, wV)
-    }
-
-    fn eval(&self, lc: &LinearCombination) -> Scalar {
-        lc.terms
-            .iter()
-            .map(|(var, coeff)| {
-                coeff
-                    * match var {
-                        Variable::MultiplierLeft(i) => self.a_L[*i],
-                        Variable::MultiplierRight(i) => self.a_R[*i],
-                        Variable::MultiplierOutput(i) => self.a_O[*i],
-                        Variable::Committed(i) => self.v[*i],
-                        Variable::One() => Scalar::one(),
-                    }
-            })
-            .sum()
     }
 
     /// Calls all remembered callbacks with an API that

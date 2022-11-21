@@ -74,6 +74,9 @@ pub trait ConstraintSystem {
     /// lc = 0
     /// ```
     fn constrain(&mut self, lc: LinearCombination);
+
+    /// Evaluate a linear combination using the values allocated in the constraint system
+    fn eval(&self, lc: &LinearCombination) -> Scalar;
 }
 
 /// An extension to the constraint system trait that permits randomized constraints.

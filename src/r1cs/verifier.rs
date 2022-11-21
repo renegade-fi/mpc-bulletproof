@@ -128,6 +128,10 @@ impl<'t, 'g> ConstraintSystem for Verifier<'t, 'g> {
         // evals to 0 for prover, etc).
         self.constraints.push(lc);
     }
+
+    fn eval(&self, _: &LinearCombination) -> Scalar {
+        unimplemented!("Verifier does not implement eval");
+    }
 }
 
 impl<'t, 'g> RandomizableConstraintSystem for Verifier<'t, 'g> {
@@ -172,6 +176,10 @@ impl<'t, 'g> ConstraintSystem for RandomizingVerifier<'t, 'g> {
 
     fn constrain(&mut self, lc: LinearCombination) {
         self.verifier.constrain(lc)
+    }
+
+    fn eval(&self, lc: &LinearCombination) -> Scalar {
+        self.verifier.eval(lc)
     }
 }
 
