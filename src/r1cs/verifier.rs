@@ -130,7 +130,11 @@ impl<'t, 'g> ConstraintSystem for Verifier<'t, 'g> {
     }
 
     fn eval(&self, _: &LinearCombination) -> Scalar {
-        unimplemented!("Verifier does not implement eval");
+        // Dummy value, at verification time this method may be called by a circuit
+        // reconstructing an implicit constraint from the underlying assignment.
+        // However, all that is needed for correct verification is that some variable
+        // is allocated, not any specific value (these come from the proof itself)
+        Scalar::zero()
     }
 }
 
