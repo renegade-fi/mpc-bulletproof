@@ -6,7 +6,10 @@ use mpc_ristretto::{beaver::SharedValueSource, network::MpcNetwork};
 
 use crate::errors::R1CSError;
 
-use super::mpc_linear_combination::{MpcLinearCombination, MpcVariable};
+use super::{
+    mpc_linear_combination::{MpcLinearCombination, MpcVariable},
+    MultiproverError,
+};
 
 /// The interface for a constraint system, abstracting over the prover
 /// and verifier's roles.
@@ -40,11 +43,12 @@ pub trait MpcConstraintSystem<'a, N: 'a + MpcNetwork + Send, S: 'a + SharedValue
     /// ```
     ///
     /// Returns `(left, right, out)` for use in further constraints.
+    #[allow(clippy::type_complexity)]
     fn multiply(
         &mut self,
         left: &MpcLinearCombination<N, S>,
         right: &MpcLinearCombination<N, S>,
-    ) -> (MpcVariable<N, S>, MpcVariable<N, S>, MpcVariable<N, S>);
+    ) -> Result<(MpcVariable<N, S>, MpcVariable<N, S>, MpcVariable<N, S>), MultiproverError>;
 
     /// Allocate a single variable.
     ///

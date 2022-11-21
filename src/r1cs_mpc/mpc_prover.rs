@@ -212,9 +212,9 @@ impl<'a, 't, 'g, N: 'a + MpcNetwork + Send, S: 'a + SharedValueSource<Scalar>>
         &mut self,
         left: &MpcLinearCombination<N, S>,
         right: &MpcLinearCombination<N, S>,
-    ) -> (MpcVariable<N, S>, MpcVariable<N, S>, MpcVariable<N, S>) {
-        let l = self.eval(left);
-        let r = self.eval(right);
+    ) -> Result<(MpcVariable<N, S>, MpcVariable<N, S>, MpcVariable<N, S>), MultiproverError> {
+        let l = self.eval(left)?;
+        let r = self.eval(right)?;
         let o = &l * &r;
 
         // Create new variables for the results
@@ -244,7 +244,7 @@ impl<'a, 't, 'g, N: 'a + MpcNetwork + Send, S: 'a + SharedValueSource<Scalar>>
         self.constrain(left_constraints);
         self.constrain(right_constraints);
 
-        (l_var, r_var, o_var)
+        Ok((l_var, r_var, o_var))
     }
 
     fn allocate(&mut self, assignment: Option<Scalar>) -> Result<MpcVariable<N, S>, R1CSError> {
@@ -343,7 +343,7 @@ impl<'a, 't, 'g, N: 'a + MpcNetwork + Send, S: 'a + SharedValueSource<Scalar>>
         &mut self,
         left: &MpcLinearCombination<N, S>,
         right: &MpcLinearCombination<N, S>,
-    ) -> (MpcVariable<N, S>, MpcVariable<N, S>, MpcVariable<N, S>) {
+    ) -> Result<(MpcVariable<N, S>, MpcVariable<N, S>, MpcVariable<N, S>), MultiproverError> {
         self.prover.multiply(left, right)
     }
 
@@ -377,19 +377,31 @@ impl<'a, 't, 'g, N: 'a + MpcNetwork + Send, S: 'a + SharedValueSource<Scalar>>
 
 impl<'a, 't, 'g, N: MpcNetwork + Send, S: SharedValueSource<Scalar>> MpcProver<'a, 't, 'g, N, S> {
     /// Evaluate a linear combination of allocated variables
-    fn eval(&self, lc: &MpcLinearCombination<N, S>) -> AuthenticatedScalar<N, S> {
-        lc.terms.iter().fold(
-            self.borrow_fabric().allocate_public_u64(0),
-            |acc, (var, coeff)| {
-                acc + match var.get_type() {
-                    Variable::MultiplierLeft(i) => coeff * &self.a_L[i],
-                    Variable::MultiplierRight(i) => coeff * &self.a_R[i],
-                    Variable::MultiplierOutput(i) => coeff * &self.a_O[i],
-                    Variable::Committed(i) => coeff * &self.v[i],
-                    Variable::One() => coeff * self.borrow_fabric().allocate_public_u64(1),
+    pub fn eval(
+        &self,
+        lc: &MpcLinearCombination<N, S>,
+    ) -> Result<AuthenticatedScalar<N, S>, MultiproverError> {
+        // Gather terms together for a batch multiplication
+        let mut coeffs = Vec::with_capacity(lc.terms.len());
+        let mut vals = Vec::with_capacity(lc.terms.len());
+
+        for (var, coeff) in lc.terms.iter() {
+            coeffs.push(coeff.clone());
+            vals.push({
+                match var.get_type() {
+                    Variable::MultiplierLeft(i) => self.a_L[i].to_owned(),
+                    Variable::MultiplierRight(i) => self.a_R[i].to_owned(),
+                    Variable::MultiplierOutput(i) => self.a_O[i].to_owned(),
+                    Variable::Committed(i) => self.v[i].to_owned(),
+                    Variable::One() => self.borrow_fabric().allocate_public_u64(1),
                 }
-            },
-        )
+            })
+        }
+
+        Ok(AuthenticatedScalar::batch_mul(&coeffs, &vals)
+            .map_err(|err| MultiproverError::Mpc(MpcError::NetworkError(err)))?
+            .iter()
+            .sum())
     }
 
     /// From a privately held input value, secret share the value and commit to it
