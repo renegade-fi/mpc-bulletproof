@@ -247,10 +247,12 @@ impl<'a, 't, 'g, N: 'a + MpcNetwork + Send, S: 'a + SharedValueSource<Scalar>>
         Ok((l_var, r_var, o_var))
     }
 
-    fn allocate(&mut self, assignment: Option<Scalar>) -> Result<MpcVariable<N, S>, R1CSError> {
+    fn allocate(
+        &mut self,
+        assignment: Option<AuthenticatedScalar<N, S>>,
+    ) -> Result<MpcVariable<N, S>, R1CSError> {
         // Allocate a scalar in the MPC network, assume public visibility
         let scalar = assignment.ok_or(R1CSError::MissingAssignment)?;
-        let network_scalar = self.borrow_fabric().allocate_public_scalar(scalar);
 
         // If there is a pending multiplier, allocate this scalar as the right
         // hand side of the multiplication gate
@@ -258,7 +260,7 @@ impl<'a, 't, 'g, N: 'a + MpcNetwork + Send, S: 'a + SharedValueSource<Scalar>>
             None => {
                 let i = self.a_L.len();
                 self.pending_multiplier = Some(i);
-                self.a_L.push(network_scalar);
+                self.a_L.push(scalar);
                 let allocated_zero = self.borrow_fabric().allocate_public_scalar(Scalar::zero());
                 self.a_R.push(allocated_zero.clone());
                 self.a_O.push(allocated_zero);
@@ -269,7 +271,7 @@ impl<'a, 't, 'g, N: 'a + MpcNetwork + Send, S: 'a + SharedValueSource<Scalar>>
             }
             Some(i) => {
                 self.pending_multiplier = None;
-                self.a_R[i] = network_scalar;
+                self.a_R[i] = scalar;
                 self.a_O[i] = &self.a_L[i] * &self.a_R[i];
                 Ok(MpcVariable::new_with_type(
                     Variable::MultiplierRight(i),
@@ -281,17 +283,15 @@ impl<'a, 't, 'g, N: 'a + MpcNetwork + Send, S: 'a + SharedValueSource<Scalar>>
 
     fn allocate_multiplier(
         &mut self,
-        input_assignments: Option<(Scalar, Scalar)>,
+        input_assignments: Option<(AuthenticatedScalar<N, S>, AuthenticatedScalar<N, S>)>,
     ) -> Result<(MpcVariable<N, S>, MpcVariable<N, S>, MpcVariable<N, S>), R1CSError> {
         // Allocate a scalar in the MPC network, assume public visibility
         let (left, right) = input_assignments.ok_or(R1CSError::MissingAssignment)?;
-        let network_left = self.borrow_fabric().allocate_public_scalar(left);
-        let network_right = self.borrow_fabric().allocate_public_scalar(right);
 
         // Allocate the output of the multiplication gate
-        self.a_O.push(&network_left * &network_right);
-        self.a_L.push(network_left);
-        self.a_R.push(network_right);
+        self.a_O.push(&left * &right);
+        self.a_L.push(left);
+        self.a_R.push(right);
 
         Ok((
             MpcVariable::new_with_type(
@@ -375,13 +375,16 @@ impl<'a, 't, 'g, N: 'a + MpcNetwork + Send, S: 'a + SharedValueSource<Scalar>>
         self.prover.multiply(left, right)
     }
 
-    fn allocate(&mut self, assignment: Option<Scalar>) -> Result<MpcVariable<N, S>, R1CSError> {
+    fn allocate(
+        &mut self,
+        assignment: Option<AuthenticatedScalar<N, S>>,
+    ) -> Result<MpcVariable<N, S>, R1CSError> {
         self.prover.allocate(assignment)
     }
 
     fn allocate_multiplier(
         &mut self,
-        input_assignments: Option<(Scalar, Scalar)>,
+        input_assignments: Option<(AuthenticatedScalar<N, S>, AuthenticatedScalar<N, S>)>,
     ) -> Result<(MpcVariable<N, S>, MpcVariable<N, S>, MpcVariable<N, S>), R1CSError> {
         self.prover.allocate_multiplier(input_assignments)
     }

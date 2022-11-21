@@ -62,7 +62,10 @@ pub trait MpcConstraintSystem<'a, N: 'a + MpcNetwork + Send, S: 'a + SharedValue
     /// has the `right` assigned to zero and all its variables committed.
     ///
     /// Returns unconstrained `Variable` for use in further constraints.
-    fn allocate(&mut self, assignment: Option<Scalar>) -> Result<MpcVariable<N, S>, R1CSError>;
+    fn allocate(
+        &mut self,
+        assignment: Option<AuthenticatedScalar<N, S>>,
+    ) -> Result<MpcVariable<N, S>, R1CSError>;
 
     /// Allocate variables `left`, `right`, and `out`
     /// with the implicit constraint that
@@ -74,7 +77,7 @@ pub trait MpcConstraintSystem<'a, N: 'a + MpcNetwork + Send, S: 'a + SharedValue
     #[allow(clippy::type_complexity)]
     fn allocate_multiplier(
         &mut self,
-        input_assignments: Option<(Scalar, Scalar)>,
+        input_assignments: Option<(AuthenticatedScalar<N, S>, AuthenticatedScalar<N, S>)>,
     ) -> Result<(MpcVariable<N, S>, MpcVariable<N, S>, MpcVariable<N, S>), R1CSError>;
 
     /// Counts the amount of allocated multipliers.
