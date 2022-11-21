@@ -2,7 +2,9 @@
 
 use curve25519_dalek::scalar::Scalar;
 use merlin::Transcript;
-use mpc_ristretto::{beaver::SharedValueSource, network::MpcNetwork};
+use mpc_ristretto::{
+    authenticated_scalar::AuthenticatedScalar, beaver::SharedValueSource, network::MpcNetwork,
+};
 
 use crate::errors::R1CSError;
 
@@ -83,6 +85,12 @@ pub trait MpcConstraintSystem<'a, N: 'a + MpcNetwork + Send, S: 'a + SharedValue
     /// lc = 0
     /// ```
     fn constrain(&mut self, lc: MpcLinearCombination<N, S>);
+
+    /// Evaluate a linear combination using the values allocated in the constraint system
+    fn eval(
+        &self,
+        lc: &MpcLinearCombination<N, S>,
+    ) -> Result<AuthenticatedScalar<N, S>, MultiproverError>;
 }
 
 /// An extension to the constraint system trait that permits randomized constraints.
