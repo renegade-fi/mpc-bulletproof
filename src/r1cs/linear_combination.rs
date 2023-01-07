@@ -19,6 +19,8 @@ pub enum Variable {
     MultiplierOutput(usize),
     /// Represents the constant 1.
     One(),
+    /// Represents the constant 0.
+    Zero(),
 }
 
 impl From<Variable> for LinearCombination {

@@ -331,6 +331,7 @@ impl<'t, 'g> Verifier<'t, 'g> {
                     Variable::One() => {
                         wc -= exp_z * coeff;
                     }
+                    Variable::Zero() => {}
                 }
             }
             exp_z *= z;

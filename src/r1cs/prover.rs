@@ -180,6 +180,7 @@ impl<'t, 'g> ConstraintSystem for Prover<'t, 'g> {
                         Variable::MultiplierOutput(i) => self.a_O[*i],
                         Variable::Committed(i) => self.v[*i],
                         Variable::One() => Scalar::one(),
+                        Variable::Zero() => Scalar::zero(),
                     }
             })
             .sum()
@@ -355,7 +356,7 @@ impl<'t, 'g> Prover<'t, 'g> {
                     Variable::Committed(i) => {
                         wV[*i] -= exp_z * coeff;
                     }
-                    Variable::One() => {
+                    Variable::One() | Variable::Zero() => {
                         // The prover doesn't need to handle constant terms
                     }
                 }

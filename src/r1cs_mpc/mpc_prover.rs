@@ -335,6 +335,7 @@ impl<'a, 't, 'g, N: 'a + MpcNetwork + Send, S: 'a + SharedValueSource<Scalar>>
                     Variable::MultiplierOutput(i) => self.a_O[i].to_owned(),
                     Variable::Committed(i) => self.v[i].to_owned(),
                     Variable::One() => self.borrow_fabric().allocate_public_u64(1),
+                    Variable::Zero() => self.borrow_fabric().allocate_zero(),
                 }
             })
         }
@@ -664,7 +665,7 @@ impl<'a, 't, 'g, N: MpcNetwork + Send, S: SharedValueSource<Scalar>> MpcProver<'
                     Variable::Committed(i) => {
                         wV[i] -= exp_z * coeff;
                     }
-                    Variable::One() => {
+                    Variable::One() | Variable::Zero() => {
                         // The prover doesn't need to handle constant terms
                     }
                 }
