@@ -50,6 +50,7 @@ tokio = { version = "1.12", features = ["macros", "rt-multi-thread"] }
 [features]
 default = ["std", "avx2_backend", "multiprover"]
 avx2_backend = ["curve25519-dalek/avx2_backend"]
+benchmarking = []
 std = ["rand", "rand/std", "thiserror"]
 multiprover = []
 integration_test = []

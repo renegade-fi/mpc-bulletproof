@@ -280,6 +280,22 @@ impl<'t, 'g> Prover<'t, 'g> {
         }
     }
 
+    /// Fetch the number of constraints currently registered in the prover
+    ///
+    /// Used as a profiling metric
+    #[cfg(feature = "benchmarking")]
+    pub fn num_constraints(&self) -> usize {
+        self.constraints.len()
+    }
+
+    /// Fetch the number of multiplication gates registered in the prover
+    ///
+    /// Used as a profiling metric
+    #[cfg(feature = "benchmarking")]
+    pub fn num_multipliers(&self) -> usize {
+        self.a_O.len()
+    }
+
     /// Creates commitment to a high-level variable and adds it to the transcript.
     ///
     /// # Inputs

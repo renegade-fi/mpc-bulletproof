@@ -188,6 +188,22 @@ impl<'a, 't, 'g, N: MpcNetwork + Send, S: SharedValueSource<Scalar>> MpcProver<'
         }
     }
 
+    /// Fetch the number of constraints currently registered in the prover
+    ///
+    /// Used as a profiling metric
+    #[cfg(feature = "benchmarking")]
+    pub fn num_constraints(&self) -> usize {
+        self.constraints.len()
+    }
+
+    /// Fetch the number of multiplication gates registered in the prover
+    ///
+    /// Used as a profiling metric
+    #[cfg(feature = "benchmarking")]
+    pub fn num_multipliers(&self) -> usize {
+        self.a_O.len()
+    }
+
     /// Helper method to borrow the MPC fabric
     fn borrow_fabric(&self) -> Ref<AuthenticatedMpcFabric<N, S>> {
         self.mpc_fabric.as_ref().borrow()
