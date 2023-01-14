@@ -118,6 +118,15 @@ impl<'t, 'g> ConstraintSystem for Verifier<'t, 'g> {
         Ok((l_var, r_var, o_var))
     }
 
+    fn commit_public(&mut self, value: Scalar) -> Variable {
+        // Generate a pedersen commitment to the value
+        let blinding_factor = Scalar::one();
+        let commitment = self.pc_gens.commit(value, blinding_factor);
+
+        // Forward the commitment to the existing method for ingesting pre-committed values
+        self.commit(commitment.compress())
+    }
+
     fn multipliers_len(&self) -> usize {
         self.num_vars
     }
@@ -172,6 +181,10 @@ impl<'t, 'g> ConstraintSystem for RandomizingVerifier<'t, 'g> {
         input_assignments: Option<(Scalar, Scalar)>,
     ) -> Result<(Variable, Variable, Variable), R1CSError> {
         self.verifier.allocate_multiplier(input_assignments)
+    }
+
+    fn commit_public(&mut self, value: Scalar) -> Variable {
+        self.verifier.commit_public(value)
     }
 
     fn multipliers_len(&self) -> usize {
@@ -255,33 +268,6 @@ impl<'t, 'g> Verifier<'t, 'g> {
         self.transcript.append_point(b"V", &commitment);
 
         Variable::Committed(i)
-    }
-
-    /// Creates a commitment to a public input (also referred to as a "statement variable")
-    ///
-    /// This commitment interface (unlike above) allows the verifier to input the
-    /// value to be committed, as opposed to simply recording the value committed to by
-    /// the prover. We provide this interface to allow the verifier to specify the public
-    /// variables to the proof, a necessary step to ensure the validity of the *correct*
-    /// statement.
-    ///
-    /// # Inputs
-    ///
-    /// The value to be committed by the verifier, as a Scalar. This value should (as above)
-    /// be passed upfront, so that its commitment can be recorded in the Fiat-Shamir
-    /// transcript.
-    ///
-    /// # Returns
-    ///
-    /// Returns a `Variable` that can be used to refer to this commited value in constraint
-    /// generation.
-    pub fn commit_public(&mut self, value: Scalar) -> Variable {
-        // Generate a pedersen commitment to the value
-        let blinding_factor = Scalar::one();
-        let commitment = self.pc_gens.commit(value, blinding_factor);
-
-        // Forward the commitment to the existing method for ingesting pre-committed values
-        self.commit(commitment.compress())
     }
 
     /// Use a challenge, `z`, to flatten the constraints in the

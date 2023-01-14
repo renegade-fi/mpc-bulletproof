@@ -66,6 +66,26 @@ pub trait ConstraintSystem {
         input_assignments: Option<(Scalar, Scalar)>,
     ) -> Result<(Variable, Variable, Variable), R1CSError>;
 
+    /// Creates a commitment to a public input (also referred to as a "statement variable")
+    ///
+    /// This commitment interface allows the verifier to input the
+    /// value to be committed, as opposed to simply recording the value committed to by
+    /// the prover. We provide this interface to allow the verifier to specify the public
+    /// variables to the proof, a necessary step to ensure the validity of the *correct*
+    /// statement.
+    ///
+    /// # Inputs
+    ///
+    /// The value to be committed by the verifier, as a Scalar. This value should (as above)
+    /// be passed upfront, so that its commitment can be recorded in the Fiat-Shamir
+    /// transcript.
+    ///
+    /// # Returns
+    ///
+    /// Returns a `Variable` that can be used to refer to this commited value in constraint
+    /// generation.
+    fn commit_public(&mut self, value: Scalar) -> Variable;
+
     /// Counts the amount of allocated multipliers.
     fn multipliers_len(&self) -> usize;
 

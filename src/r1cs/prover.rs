@@ -159,6 +159,14 @@ impl<'t, 'g> ConstraintSystem for Prover<'t, 'g> {
         Ok((l_var, r_var, o_var))
     }
 
+    /// Creates a commitment to a public (statement) variable. We do not blind these
+    /// commitments as their values are assumed to be public. Instead, we use a constant
+    /// "blinding" factor of one to ensure that the verifier can mimic the commitment
+    /// when it goes to verify the proof.
+    fn commit_public(&mut self, v: Scalar) -> Variable {
+        self.commit(v, Scalar::one()).1
+    }
+
     fn multipliers_len(&self) -> usize {
         self.a_L.len()
     }
@@ -221,6 +229,10 @@ impl<'t, 'g> ConstraintSystem for RandomizingProver<'t, 'g> {
         input_assignments: Option<(Scalar, Scalar)>,
     ) -> Result<(Variable, Variable, Variable), R1CSError> {
         self.prover.allocate_multiplier(input_assignments)
+    }
+
+    fn commit_public(&mut self, value: Scalar) -> Variable {
+        self.prover.commit_public(value)
     }
 
     fn multipliers_len(&self) -> usize {
@@ -323,14 +335,6 @@ impl<'t, 'g> Prover<'t, 'g> {
         self.transcript.append_point(b"V", &V);
 
         (V, Variable::Committed(i))
-    }
-
-    /// Creates a commitment to a public (statement) variable. We do not blind these
-    /// commitments as their values are assumed to be public. Instead, we use a constant
-    /// "blinding" factor of one to ensure that the verifier can mimic the commitment
-    /// when it goes to verify the proof.
-    pub fn commit_public(&mut self, v: Scalar) -> (CompressedRistretto, Variable) {
-        self.commit(v, Scalar::one())
     }
 
     /// Use a challenge, `z`, to flatten the constraints in the
