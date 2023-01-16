@@ -42,6 +42,16 @@ pub trait ConstraintSystem {
         right: LinearCombination,
     ) -> (Variable, Variable, Variable);
 
+    /// Fetch the number of constraints currently registered in the prover
+    ///
+    /// Used as a profiling metric
+    fn num_constraints(&self) -> usize;
+
+    /// Fetch the number of multiplication gates registered in the prover
+    ///
+    /// Used as a profiling metric
+    fn num_multipliers(&self) -> usize;
+
     /// Allocate a single variable.
     ///
     /// This either allocates a new multiplier and returns its `left` variable,
@@ -85,9 +95,6 @@ pub trait ConstraintSystem {
     /// Returns a `Variable` that can be used to refer to this commited value in constraint
     /// generation.
     fn commit_public(&mut self, value: Scalar) -> Variable;
-
-    /// Counts the amount of allocated multipliers.
-    fn multipliers_len(&self) -> usize;
 
     /// Enforce the explicit constraint that
     /// ```text

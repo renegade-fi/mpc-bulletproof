@@ -66,6 +66,14 @@ impl<'t, 'g> ConstraintSystem for Verifier<'t, 'g> {
         self.transcript
     }
 
+    fn num_constraints(&self) -> usize {
+        self.constraints.len()
+    }
+
+    fn num_multipliers(&self) -> usize {
+        self.num_vars
+    }
+
     fn multiply(
         &mut self,
         mut left: LinearCombination,
@@ -127,10 +135,6 @@ impl<'t, 'g> ConstraintSystem for Verifier<'t, 'g> {
         self.commit(commitment.compress())
     }
 
-    fn multipliers_len(&self) -> usize {
-        self.num_vars
-    }
-
     fn constrain(&mut self, lc: LinearCombination) {
         // TODO: check that the linear combinations are valid
         // (e.g. that variables are valid, that the linear combination
@@ -164,6 +168,14 @@ impl<'t, 'g> ConstraintSystem for RandomizingVerifier<'t, 'g> {
         self.verifier.transcript
     }
 
+    fn num_constraints(&self) -> usize {
+        self.verifier.num_constraints()
+    }
+
+    fn num_multipliers(&self) -> usize {
+        self.verifier.num_multipliers()
+    }
+
     fn multiply(
         &mut self,
         left: LinearCombination,
@@ -185,10 +197,6 @@ impl<'t, 'g> ConstraintSystem for RandomizingVerifier<'t, 'g> {
 
     fn commit_public(&mut self, value: Scalar) -> Variable {
         self.verifier.commit_public(value)
-    }
-
-    fn multipliers_len(&self) -> usize {
-        self.verifier.multipliers_len()
     }
 
     fn constrain(&mut self, lc: LinearCombination) {

@@ -91,6 +91,14 @@ impl<'t, 'g> ConstraintSystem for Prover<'t, 'g> {
         self.transcript
     }
 
+    fn num_constraints(&self) -> usize {
+        self.constraints.len()
+    }
+
+    fn num_multipliers(&self) -> usize {
+        self.a_O.len()
+    }
+
     fn multiply(
         &mut self,
         mut left: LinearCombination,
@@ -167,10 +175,6 @@ impl<'t, 'g> ConstraintSystem for Prover<'t, 'g> {
         self.commit(v, Scalar::one()).1
     }
 
-    fn multipliers_len(&self) -> usize {
-        self.a_L.len()
-    }
-
     fn constrain(&mut self, lc: LinearCombination) {
         // TODO: check that the linear combinations are valid
         // (e.g. that variables are valid, that the linear combination evals to 0 for prover, etc).
@@ -212,6 +216,14 @@ impl<'t, 'g> ConstraintSystem for RandomizingProver<'t, 'g> {
         self.prover.transcript
     }
 
+    fn num_constraints(&self) -> usize {
+        self.prover.num_constraints()
+    }
+
+    fn num_multipliers(&self) -> usize {
+        self.prover.num_multipliers()
+    }
+
     fn multiply(
         &mut self,
         left: LinearCombination,
@@ -233,10 +245,6 @@ impl<'t, 'g> ConstraintSystem for RandomizingProver<'t, 'g> {
 
     fn commit_public(&mut self, value: Scalar) -> Variable {
         self.prover.commit_public(value)
-    }
-
-    fn multipliers_len(&self) -> usize {
-        self.prover.multipliers_len()
     }
 
     fn constrain(&mut self, lc: LinearCombination) {
@@ -290,22 +298,6 @@ impl<'t, 'g> Prover<'t, 'g> {
             deferred_constraints: Vec::new(),
             pending_multiplier: None,
         }
-    }
-
-    /// Fetch the number of constraints currently registered in the prover
-    ///
-    /// Used as a profiling metric
-    #[cfg(feature = "benchmarking")]
-    pub fn num_constraints(&self) -> usize {
-        self.constraints.len()
-    }
-
-    /// Fetch the number of multiplication gates registered in the prover
-    ///
-    /// Used as a profiling metric
-    #[cfg(feature = "benchmarking")]
-    pub fn num_multipliers(&self) -> usize {
-        self.a_O.len()
     }
 
     /// Creates commitment to a high-level variable and adds it to the transcript.
