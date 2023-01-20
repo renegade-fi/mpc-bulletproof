@@ -183,16 +183,21 @@ impl<L: Into<LinearCombination>> Sub<L> for LinearCombination {
     type Output = Self;
 
     fn sub(mut self, rhs: L) -> Self::Output {
-        self.terms
-            .extend(rhs.into().terms.iter().map(|(var, coeff)| (*var, -coeff)));
+        self -= rhs;
         LinearCombination { terms: self.terms }
     }
 }
 
 impl<L: Into<LinearCombination>> SubAssign<L> for LinearCombination {
     fn sub_assign(&mut self, rhs: L) {
-        self.terms
-            .extend(rhs.into().terms.iter().map(|(var, coeff)| (*var, -coeff)))
+        let rhs_lc: LinearCombination = rhs.into();
+        for (var, coeff) in rhs_lc.terms.iter() {
+            if let Some(existing_coeff) = self.terms.get(var) {
+                self.terms.insert(*var, coeff - existing_coeff);
+            } else {
+                self.terms.insert(*var, -coeff);
+            }
+        }
     }
 }
 
@@ -237,5 +242,33 @@ impl<S: Into<Scalar>> Mul<S> for LinearCombination {
             *s *= other
         }
         self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use curve25519_dalek::scalar::Scalar;
+    use merlin::Transcript;
+
+    use crate::{
+        r1cs::{ConstraintSystem, Prover},
+        PedersenGens,
+    };
+
+    use super::Variable;
+
+    /// Tests a simple case that was previously buggy; subtracting one from one should give zero
+    #[test]
+    fn test_subtraction() {
+        let one_var = Variable::One();
+        let res = one_var - Scalar::one();
+
+        // Evaluate this in a constraint system for posterity sake
+        let mut prover_transcript = Transcript::new("test".as_bytes());
+        let pc_gens = PedersenGens::default();
+        let cs = Prover::new(&pc_gens, &mut prover_transcript);
+
+        let eval_res = cs.eval(&res);
+        assert_eq!(eval_res, Scalar::zero());
     }
 }
