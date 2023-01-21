@@ -402,6 +402,13 @@ impl<'t, 'g> Prover<'t, 'g> {
         }
     }
 
+    /// Checks whether all the constraints are satisfied, does not prove the statement
+    pub fn constraints_satisfied(&self) -> bool {
+        self.constraints
+            .iter()
+            .all(|constraint| self.eval(constraint) == Scalar::zero())
+    }
+
     /// Consume this `ConstraintSystem` to produce a proof.
     pub fn prove(mut self, bp_gens: &BulletproofGens) -> Result<R1CSProof, R1CSError> {
         use crate::util;
