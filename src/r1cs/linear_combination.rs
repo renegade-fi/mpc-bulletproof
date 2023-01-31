@@ -193,7 +193,7 @@ impl<L: Into<LinearCombination>> SubAssign<L> for LinearCombination {
         let rhs_lc: LinearCombination = rhs.into();
         for (var, coeff) in rhs_lc.terms.iter() {
             if let Some(existing_coeff) = self.terms.get(var) {
-                self.terms.insert(*var, coeff - existing_coeff);
+                self.terms.insert(*var, existing_coeff - coeff);
             } else {
                 self.terms.insert(*var, -coeff);
             }
