@@ -71,7 +71,7 @@ impl LinearProof {
 
         // Append all public data to the transcript
         transcript.innerproduct_domain_sep(n as u64);
-        transcript.append_point(b"C", &C);
+        transcript.append_point(b"C", C);
         for b_i in &b_vec {
             transcript.append_scalar(b"b_i", b_i);
         }
@@ -184,7 +184,7 @@ impl LinearProof {
 
         // Append all public data to the transcript
         transcript.innerproduct_domain_sep(n as u64);
-        transcript.append_point(b"C", &C);
+        transcript.append_point(b"C", C);
         for b_i in &b_vec {
             transcript.append_scalar(b"b_i", b_i);
         }
