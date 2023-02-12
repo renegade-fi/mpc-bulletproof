@@ -227,6 +227,18 @@ impl<'de> Deserialize<'de> for R1CSProof {
                 formatter.write_str("a valid R1CSProof")
             }
 
+            fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+            where
+                A: serde::de::SeqAccess<'de>,
+            {
+                let mut bytes = Vec::with_capacity(seq.size_hint().unwrap_or(100 /* default */));
+                while let Ok(Some(next_byte)) = seq.next_element::<u8>() {
+                    bytes.push(next_byte)
+                }
+
+                R1CSProof::from_bytes(&bytes).map_err(serde::de::Error::custom)
+            }
+
             fn visit_bytes<E>(self, v: &[u8]) -> Result<R1CSProof, E>
             where
                 E: serde::de::Error,
