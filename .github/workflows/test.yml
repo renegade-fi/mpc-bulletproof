@@ -1,19 +1,13 @@
-name: Rust
+on: push
 
-on:
-  push:
-    branches: [ "main" ]
-  pull_request:
-    branches: [ "main" ]
+name: Cargo Test
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  build:
-
+  cargo-test:
     runs-on: ubuntu-latest
-
     steps:
     - uses: actions/checkout@v3
     - name: Build
