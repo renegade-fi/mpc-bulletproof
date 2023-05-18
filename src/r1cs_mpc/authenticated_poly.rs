@@ -423,6 +423,14 @@ mod tests {
             0
         }
 
+        async fn send_bytes(&mut self, _: &[u8]) -> Result<(), MpcNetworkError> {
+            Ok(())
+        }
+
+        async fn receive_bytes(&mut self) -> Result<Vec<u8>, MpcNetworkError> {
+            unimplemented!("not used in testing")
+        }
+
         async fn send_scalars(&mut self, _: &[Scalar]) -> Result<(), MpcNetworkError> {
             Ok(())
         }
