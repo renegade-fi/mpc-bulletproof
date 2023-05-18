@@ -5,12 +5,13 @@ use clear_on_drop::clear::Clear;
 use curve25519_dalek::ristretto::{CompressedRistretto, RistrettoPoint};
 use curve25519_dalek::scalar::Scalar;
 use curve25519_dalek::traits::{Identity, MultiscalarMul};
+use itertools::Itertools;
 use merlin::Transcript;
 use mpc_ristretto::mpc_scalar::scalar_to_u64;
 
 use super::{
     ConstraintSystem, LinearCombination, R1CSProof, RandomizableConstraintSystem,
-    RandomizedConstraintSystem, Variable,
+    RandomizedConstraintSystem, SparseReducedMatrix, Variable,
 };
 
 use crate::errors::R1CSError;
@@ -100,8 +101,20 @@ impl<'t, 'g> ConstraintSystem for Prover<'t, 'g> {
         self.a_O.len()
     }
 
-    fn get_constraints(&self) -> &Vec<LinearCombination> {
-        &self.constraints
+    fn get_weights(
+        &self,
+    ) -> (
+        SparseReducedMatrix,
+        SparseReducedMatrix,
+        SparseReducedMatrix,
+        SparseReducedMatrix,
+        Vec<Scalar>,
+    ) {
+        // Extract sparse-reduced weights from each constraint to construct the matrices
+        self.constraints
+            .iter()
+            .map(|lc| lc.extract_weights())
+            .multiunzip()
     }
 
     fn multiply(
@@ -234,8 +247,16 @@ impl<'t, 'g> ConstraintSystem for RandomizingProver<'t, 'g> {
         self.prover.num_multipliers()
     }
 
-    fn get_constraints(&self) -> &Vec<LinearCombination> {
-        self.prover.get_constraints()
+    fn get_weights(
+        &self,
+    ) -> (
+        SparseReducedMatrix,
+        SparseReducedMatrix,
+        SparseReducedMatrix,
+        SparseReducedMatrix,
+        Vec<Scalar>,
+    ) {
+        self.prover.get_weights()
     }
 
     fn multiply(

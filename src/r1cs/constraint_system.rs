@@ -3,6 +3,18 @@
 use super::{LinearCombination, R1CSError, Variable};
 use curve25519_dalek::scalar::Scalar;
 use merlin::Transcript;
+use serde::{Deserialize, Serialize};
+
+pub(crate) type SparseWeightRow = Vec<(usize, Scalar)>;
+
+#[derive(Serialize, Deserialize, Default)]
+pub struct SparseReducedMatrix(Vec<SparseWeightRow>);
+
+impl Extend<SparseWeightRow> for SparseReducedMatrix {
+    fn extend<T: IntoIterator<Item = SparseWeightRow>>(&mut self, iter: T) {
+        self.0.extend(iter)
+    }
+}
 
 /// The interface for a constraint system, abstracting over the prover
 /// and verifier's roles.
@@ -52,10 +64,20 @@ pub trait ConstraintSystem {
     /// Used as a profiling metric
     fn num_multipliers(&self) -> usize;
 
-    /// Fetch the constraints in the system
+    /// Get the sparse-reduced weight matrices & constant vector representing
+    /// the constraint system
     ///
-    /// Used so that they can be exported
-    fn get_constraints(&self) -> &Vec<LinearCombination>;
+    /// Used so that the publicly-known "structure" of the constraint system
+    /// can be exported
+    fn get_weights(
+        &self,
+    ) -> (
+        SparseReducedMatrix,
+        SparseReducedMatrix,
+        SparseReducedMatrix,
+        SparseReducedMatrix,
+        Vec<Scalar>,
+    );
 
     /// Allocate a single variable.
     ///

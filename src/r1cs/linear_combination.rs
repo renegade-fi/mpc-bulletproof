@@ -6,6 +6,8 @@ use std::collections::HashMap;
 use std::iter::FromIterator;
 use std::ops::{Add, Mul, Neg, Sub};
 
+use super::constraint_system::SparseWeightRow;
+
 /// Represents a variable in a constraint system.
 #[derive(Copy, Clone, Debug, Hash, PartialEq, Eq)]
 pub enum Variable {
@@ -128,6 +130,53 @@ impl LinearCombination {
         } else {
             self.terms.insert(var, coeff);
         }
+    }
+
+    /// Extracts the non-zero weights for the left, right, output,
+    /// and witness variables, and for the constant terms, into
+    /// rows of the sparse-reduced weight matrices
+    pub fn extract_weights(
+        &self,
+    ) -> (
+        SparseWeightRow,
+        SparseWeightRow,
+        SparseWeightRow,
+        SparseWeightRow,
+        Scalar,
+    ) {
+        // Each LC can have up to `n` non-zero terms of each variable
+        // and a single constant
+
+        let mut w_l_row = Vec::new();
+        let mut w_r_row = Vec::new();
+        let mut w_o_row = Vec::new();
+        let mut w_v_row = Vec::new();
+        let mut c = Scalar::zero();
+
+        for (&var, &coeff) in &self.terms {
+            if coeff != Scalar::zero() {
+                match var {
+                    Variable::MultiplierLeft(i) => {
+                        w_l_row.push((i, coeff));
+                    }
+                    Variable::MultiplierRight(i) => {
+                        w_r_row.push((i, coeff));
+                    }
+                    Variable::MultiplierOutput(i) => {
+                        w_o_row.push((i, coeff));
+                    }
+                    Variable::Committed(i) => {
+                        w_v_row.push((i, coeff));
+                    }
+                    Variable::One() => {
+                        c = coeff;
+                    }
+                    Variable::Zero() => {}
+                }
+            }
+        }
+
+        (w_l_row, w_r_row, w_o_row, w_v_row, c)
     }
 }
 
