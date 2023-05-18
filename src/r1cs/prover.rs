@@ -100,6 +100,10 @@ impl<'t, 'g> ConstraintSystem for Prover<'t, 'g> {
         self.a_O.len()
     }
 
+    fn get_constraints(&self) -> &Vec<LinearCombination> {
+        &self.constraints
+    }
+
     fn multiply(
         &mut self,
         mut left: LinearCombination,
@@ -228,6 +232,10 @@ impl<'t, 'g> ConstraintSystem for RandomizingProver<'t, 'g> {
 
     fn num_multipliers(&self) -> usize {
         self.prover.num_multipliers()
+    }
+
+    fn get_constraints(&self) -> &Vec<LinearCombination> {
+        self.prover.get_constraints()
     }
 
     fn multiply(

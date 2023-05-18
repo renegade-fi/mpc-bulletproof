@@ -74,6 +74,10 @@ impl<'t, 'g> ConstraintSystem for Verifier<'t, 'g> {
         self.num_vars
     }
 
+    fn get_constraints(&self) -> &Vec<LinearCombination> {
+        &self.constraints
+    }
+
     fn multiply(
         &mut self,
         mut left: LinearCombination,
@@ -174,6 +178,10 @@ impl<'t, 'g> ConstraintSystem for RandomizingVerifier<'t, 'g> {
 
     fn num_multipliers(&self) -> usize {
         self.verifier.num_multipliers()
+    }
+
+    fn get_constraints(&self) -> &Vec<LinearCombination> {
+        self.verifier.get_constraints()
     }
 
     fn multiply(

@@ -52,6 +52,11 @@ pub trait ConstraintSystem {
     /// Used as a profiling metric
     fn num_multipliers(&self) -> usize;
 
+    /// Fetch the constraints in the system
+    ///
+    /// Used so that they can be exported
+    fn get_constraints(&self) -> &Vec<LinearCombination>;
+
     /// Allocate a single variable.
     ///
     /// This either allocates a new multiplier and returns its `left` variable,
