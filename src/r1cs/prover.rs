@@ -10,8 +10,8 @@ use merlin::Transcript;
 use mpc_ristretto::mpc_scalar::scalar_to_u64;
 
 use super::{
-    ConstraintSystem, LinearCombination, R1CSProof, RandomizableConstraintSystem,
-    RandomizedConstraintSystem, SparseReducedMatrix, Variable,
+    CircuitWeights, ConstraintSystem, LinearCombination, R1CSProof, RandomizableConstraintSystem,
+    RandomizedConstraintSystem, Variable,
 };
 
 use crate::errors::R1CSError;
@@ -101,20 +101,21 @@ impl<'t, 'g> ConstraintSystem for Prover<'t, 'g> {
         self.a_O.len()
     }
 
-    fn get_weights(
-        &self,
-    ) -> (
-        SparseReducedMatrix,
-        SparseReducedMatrix,
-        SparseReducedMatrix,
-        SparseReducedMatrix,
-        Vec<Scalar>,
-    ) {
+    fn get_weights(&self) -> CircuitWeights {
         // Extract sparse-reduced weights from each constraint to construct the matrices
-        self.constraints
+        let (w_l, w_r, w_o, w_v, c) = self
+            .constraints
             .iter()
             .map(|lc| lc.extract_weights())
-            .multiunzip()
+            .multiunzip();
+
+        CircuitWeights {
+            w_l,
+            w_r,
+            w_o,
+            w_v,
+            c,
+        }
     }
 
     fn multiply(
@@ -247,15 +248,7 @@ impl<'t, 'g> ConstraintSystem for RandomizingProver<'t, 'g> {
         self.prover.num_multipliers()
     }
 
-    fn get_weights(
-        &self,
-    ) -> (
-        SparseReducedMatrix,
-        SparseReducedMatrix,
-        SparseReducedMatrix,
-        SparseReducedMatrix,
-        Vec<Scalar>,
-    ) {
+    fn get_weights(&self) -> CircuitWeights {
         self.prover.get_weights()
     }
 

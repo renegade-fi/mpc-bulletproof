@@ -46,6 +46,7 @@ hex = "0.3"
 inventory = "0.3"
 rand_chacha = "0.2"
 tokio = { version = "1.12", features = ["macros", "rt-multi-thread"] }
+lazy_static = "1.4"
 
 [features]
 default = ["std", "avx2_backend", "multiprover"]
@@ -60,7 +61,7 @@ name = "range_proof"
 
 [[test]]
 name = "r1cs"
-required-features = ["yoloproofs"]
+required-features = ["multiprover"]
 
 [[test]]
 name = "integration"
@@ -79,7 +80,7 @@ harness = false
 [[bench]]
 name = "r1cs"
 harness = false
-required-features = ["yoloproofs"]
+required-features = ["multiprover"]
 
 [[bench]]
 name = "linear_proof"

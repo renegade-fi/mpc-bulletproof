@@ -147,29 +147,29 @@ impl LinearCombination {
         // Each LC can have up to `n` non-zero terms of each variable
         // and a single constant
 
-        let mut w_l_row = Vec::new();
-        let mut w_r_row = Vec::new();
-        let mut w_o_row = Vec::new();
-        let mut w_v_row = Vec::new();
+        let mut w_l_row = SparseWeightRow(Vec::new());
+        let mut w_r_row = SparseWeightRow(Vec::new());
+        let mut w_o_row = SparseWeightRow(Vec::new());
+        let mut w_v_row = SparseWeightRow(Vec::new());
         let mut c = Scalar::zero();
 
         for (&var, &coeff) in &self.terms {
             if coeff != Scalar::zero() {
                 match var {
                     Variable::MultiplierLeft(i) => {
-                        w_l_row.push((i, coeff));
+                        w_l_row.0.push((i, coeff));
                     }
                     Variable::MultiplierRight(i) => {
-                        w_r_row.push((i, coeff));
+                        w_r_row.0.push((i, coeff));
                     }
                     Variable::MultiplierOutput(i) => {
-                        w_o_row.push((i, coeff));
+                        w_o_row.0.push((i, coeff));
                     }
                     Variable::Committed(i) => {
-                        w_v_row.push((i, coeff));
+                        w_v_row.0.push((i, -coeff));
                     }
                     Variable::One() => {
-                        c = coeff;
+                        c = -coeff;
                     }
                     Variable::Zero() => {}
                 }
