@@ -1,15 +1,17 @@
 #![allow(non_snake_case)]
 
-extern crate bulletproofs;
 extern crate curve25519_dalek;
+extern crate lazy_static;
 extern crate merlin;
+extern crate mpc_bulletproof;
 extern crate rand;
 
-use bulletproofs::r1cs::*;
-use bulletproofs::{BulletproofGens, PedersenGens};
 use curve25519_dalek::ristretto::CompressedRistretto;
 use curve25519_dalek::scalar::Scalar;
+use lazy_static::lazy_static;
 use merlin::Transcript;
+use mpc_bulletproof::r1cs::*;
+use mpc_bulletproof::{BulletproofGens, PedersenGens};
 use rand::seq::SliceRandom;
 use rand::thread_rng;
 
@@ -125,7 +127,7 @@ impl ShuffleProof {
         transcript.append_message(b"dom-sep", b"ShuffleProof");
         transcript.append_u64(b"k", k as u64);
 
-        let mut verifier = Verifier::new(transcript);
+        let mut verifier = Verifier::new(pc_gens, transcript);
 
         let input_vars: Vec<_> = input_commitments
             .iter()
@@ -139,7 +141,7 @@ impl ShuffleProof {
 
         ShuffleProof::gadget(&mut verifier, input_vars, output_vars)?;
 
-        verifier.verify(&self.0, &pc_gens, &bp_gens)
+        verifier.verify(&self.0, bp_gens)
     }
 }
 
@@ -256,7 +258,7 @@ fn example_gadget_proof(
     // 2. Commit high-level variables
     let (commitments, vars): (Vec<_>, Vec<_>) = [a1, a2, b1, b2, c1]
         .into_iter()
-        .map(|x| prover.commit(Scalar::from(*x), Scalar::random(&mut thread_rng())))
+        .map(|x| prover.commit(Scalar::from(x), Scalar::random(&mut thread_rng())))
         .unzip();
 
     // 3. Build a CS
@@ -287,7 +289,7 @@ fn example_gadget_verify(
     let mut transcript = Transcript::new(b"R1CSExampleGadget");
 
     // 1. Create a verifier
-    let mut verifier = Verifier::new(&mut transcript);
+    let mut verifier = Verifier::new(pc_gens, &mut transcript);
 
     // 2. Commit high-level variables
     let vars: Vec<_> = commitments.iter().map(|V| verifier.commit(*V)).collect();
@@ -305,7 +307,7 @@ fn example_gadget_verify(
 
     // 4. Verify the proof
     verifier
-        .verify(&proof, &pc_gens, &bp_gens)
+        .verify(&proof, bp_gens)
         .map_err(|_| R1CSError::VerificationError)
 }
 
@@ -347,20 +349,270 @@ fn example_gadget_roundtrip_serialization_helper(
     example_gadget_verify(&pc_gens, &bp_gens, c2, proof, commitments)
 }
 
+// Extract weight matrix for example gadget from prover
+fn example_gadget_constraint_ir_prover(
+    a1: u64,
+    a2: u64,
+    b1: u64,
+    b2: u64,
+    c1: u64,
+    c2: u64,
+) -> CircuitWeights {
+    // Common
+    let pc_gens = PedersenGens::default();
+
+    let mut transcript = Transcript::new(b"R1CSExampleGadget");
+
+    // 1. Create a prover
+    let mut prover = Prover::new(&pc_gens, &mut transcript);
+
+    // 2. Commit high-level variables
+    let (_, vars): (Vec<_>, Vec<_>) = [a1, a2, b1, b2, c1]
+        .into_iter()
+        .map(|x| prover.commit(Scalar::from(x), Scalar::random(&mut thread_rng())))
+        .unzip();
+
+    // 3. Build a CS
+    example_gadget(
+        &mut prover,
+        vars[0].into(),
+        vars[1].into(),
+        vars[2].into(),
+        vars[3].into(),
+        vars[4].into(),
+        Scalar::from(c2).into(),
+    );
+
+    // 4. Extract weight matrices from CS
+    prover.get_weights()
+}
+
+// Extract weight matrix for example gadget from verifier
+fn example_gadget_constraint_ir_verifier(
+    a1: u64,
+    a2: u64,
+    b1: u64,
+    b2: u64,
+    c1: u64,
+    c2: u64,
+) -> CircuitWeights {
+    // Common
+    let pc_gens = PedersenGens::default();
+
+    let mut transcript = Transcript::new(b"R1CSExampleGadget");
+
+    let commitments: Vec<CompressedRistretto>;
+    {
+        // Open new scope so that we can reuse `&mut transcript`,
+        // it's fine to drop prover after we generate commitments
+
+        // 1. Create a prover to generate commitments
+        let mut prover = Prover::new(&pc_gens, &mut transcript);
+
+        // 2. Commit high-level variables (prover)
+        let (prover_commitments, _): (Vec<_>, Vec<_>) = [a1, a2, b1, b2, c1]
+            .into_iter()
+            .map(|x| prover.commit(Scalar::from(x), Scalar::random(&mut thread_rng())))
+            .unzip();
+
+        commitments = prover_commitments;
+    }
+
+    // 3. Create a verifier
+    let mut verifier = Verifier::new(&pc_gens, &mut transcript);
+
+    // 4. Commit high-level variables (verifier)
+    let vars: Vec<_> = commitments.iter().map(|V| verifier.commit(*V)).collect();
+
+    // 5. Build a CS
+    example_gadget(
+        &mut verifier,
+        vars[0].into(),
+        vars[1].into(),
+        vars[2].into(),
+        vars[3].into(),
+        vars[4].into(),
+        Scalar::from(c2).into(),
+    );
+
+    // 6. Extract weight matrices from CS
+    verifier.get_weights()
+}
+
+lazy_static! {
+    static ref EXAMPLE_GADGET_A1: u64 = 3;
+    static ref EXAMPLE_GADGET_A2: u64 = 4;
+    static ref EXAMPLE_GADGET_B1: u64 = 6;
+    static ref EXAMPLE_GADGET_B2: u64 = 1;
+    static ref EXAMPLE_GADGET_C1: u64 = 40;
+    static ref EXAMPLE_GADGET_C2: u64 = 9;
+
+    // Constraints have form: w_L * a_L + w_R * a_R + w_O * a_O = w_V * v + c
+    // Constrains (a1 + a2) * (b1 + b2) = (c1 + c2)
+    // Under the hood of the example gadget:
+
+    // v[0] = a1
+    // v[1] = a2
+    // v[2] = b1
+    // v[3] = b2
+    // v[4] = c1
+
+    // a3 = eval(v[0] + v[1])
+    // a_L[0] = a3
+    // constraints[0] = (v[0] + v[1]) - a_L[0]
+
+    // b3 = eval(v[2] + v[3])
+    // a_R[0] = b3
+    // constraints[1] = (v[2] + v[3]) - a_R[0]
+
+    // o = a3 * b3
+    // a_O[0] = o
+
+    // constraints[2] = (v[4] + c2) - a_O[0]
+
+    // Thus, matrices should be:
+
+    /*
+       w_L = [           [
+           [-1],            [(0, -1)]
+           [0],    =>       []
+           [0],             []
+       ]                 ]
+    */
+
+    /*
+       w_R = [           [
+           [0],             []
+           [-1],    =>      [(0, -1)]
+           [0],             []
+       ]                 ]
+    */
+
+    /*
+       w_O = [           [
+           [0],             []
+           [0],    =>       []
+           [-1],            [(0, -1)]
+       ]                 ]
+    */
+
+    /*
+       Weights here are negative b/c on RHS
+       w_V = [                         [
+           [-1, -1, 0, 0, 0],             [(0, -1), (1, -1)]
+           [0, 0, -1, -1, 0],    =>       [(2, -1), (3, -1)]
+           [0, 0, 0, 0, -1],              [(4, -1)]
+       ]                               ]
+    */
+
+    /*
+       Weights here are negative b/c on RHS
+       c = [
+           0,
+           0,
+           -c2
+       ]
+    */
+
+    static ref EXAMPLE_GADGET_WEIGHTS: CircuitWeights = CircuitWeights {
+        w_l: SparseReducedMatrix(vec![
+            SparseWeightRow(vec![(0, -Scalar::one())]),
+            SparseWeightRow(vec![]),
+            SparseWeightRow(vec![]),
+        ]),
+        w_r: SparseReducedMatrix(vec![
+            SparseWeightRow(vec![]),
+            SparseWeightRow(vec![(0, -Scalar::one())]),
+            SparseWeightRow(vec![]),
+        ]),
+        w_o: SparseReducedMatrix(vec![
+            SparseWeightRow(vec![]),
+            SparseWeightRow(vec![]),
+            SparseWeightRow(vec![(0, -Scalar::one())]),
+        ]),
+        w_v: SparseReducedMatrix(vec![
+            SparseWeightRow(vec![(0, -Scalar::one()), (1, -Scalar::one())]),
+            SparseWeightRow(vec![(2, -Scalar::one()), (3, -Scalar::one())]),
+            SparseWeightRow(vec![(4, -Scalar::one())]),
+        ]),
+        c: vec![Scalar::zero(), Scalar::zero(), -Scalar::from(*EXAMPLE_GADGET_C2)]
+    };
+}
+
 #[test]
 fn example_gadget_test() {
     // (3 + 4) * (6 + 1) = (40 + 9)
-    assert!(example_gadget_roundtrip_helper(3, 4, 6, 1, 40, 9).is_ok());
+    assert!(example_gadget_roundtrip_helper(
+        *EXAMPLE_GADGET_A1,
+        *EXAMPLE_GADGET_A2,
+        *EXAMPLE_GADGET_B1,
+        *EXAMPLE_GADGET_B2,
+        *EXAMPLE_GADGET_C1,
+        *EXAMPLE_GADGET_C2
+    )
+    .is_ok());
     // (3 + 4) * (6 + 1) != (40 + 10)
-    assert!(example_gadget_roundtrip_helper(3, 4, 6, 1, 40, 10).is_err());
+    assert!(example_gadget_roundtrip_helper(
+        *EXAMPLE_GADGET_A1,
+        *EXAMPLE_GADGET_A2,
+        *EXAMPLE_GADGET_B1,
+        *EXAMPLE_GADGET_B2,
+        *EXAMPLE_GADGET_C1,
+        10
+    )
+    .is_err());
 }
 
 #[test]
 fn example_gadget_serialization_test() {
     // (3 + 4) * (6 + 1) = (40 + 9)
-    assert!(example_gadget_roundtrip_serialization_helper(3, 4, 6, 1, 40, 9).is_ok());
+    assert!(example_gadget_roundtrip_serialization_helper(
+        *EXAMPLE_GADGET_A1,
+        *EXAMPLE_GADGET_A2,
+        *EXAMPLE_GADGET_B1,
+        *EXAMPLE_GADGET_B2,
+        *EXAMPLE_GADGET_C1,
+        *EXAMPLE_GADGET_C2
+    )
+    .is_ok());
     // (3 + 4) * (6 + 1) != (40 + 10)
-    assert!(example_gadget_roundtrip_serialization_helper(3, 4, 6, 1, 40, 10).is_err());
+    assert!(example_gadget_roundtrip_serialization_helper(
+        *EXAMPLE_GADGET_A1,
+        *EXAMPLE_GADGET_A2,
+        *EXAMPLE_GADGET_B1,
+        *EXAMPLE_GADGET_B2,
+        *EXAMPLE_GADGET_C1,
+        10
+    )
+    .is_err());
+}
+
+#[test]
+fn example_gadget_constraint_ir_prover_test() {
+    let circuit_weights = example_gadget_constraint_ir_prover(
+        *EXAMPLE_GADGET_A1,
+        *EXAMPLE_GADGET_A2,
+        *EXAMPLE_GADGET_B1,
+        *EXAMPLE_GADGET_B2,
+        *EXAMPLE_GADGET_C1,
+        *EXAMPLE_GADGET_C2,
+    );
+
+    assert!(circuit_weights == *EXAMPLE_GADGET_WEIGHTS);
+}
+
+#[test]
+fn example_gadget_constraint_ir_verifier_test() {
+    let circuit_weights = example_gadget_constraint_ir_verifier(
+        *EXAMPLE_GADGET_A1,
+        *EXAMPLE_GADGET_A2,
+        *EXAMPLE_GADGET_B1,
+        *EXAMPLE_GADGET_B2,
+        *EXAMPLE_GADGET_C1,
+        *EXAMPLE_GADGET_C2,
+    );
+
+    assert!(circuit_weights == *EXAMPLE_GADGET_WEIGHTS);
 }
 
 // Range Proof gadget
@@ -441,7 +693,7 @@ fn range_proof_helper(v_val: u64, n: usize) -> Result<(), R1CSError> {
 
     // Verifier makes a `ConstraintSystem` instance representing a merge gadget
     let mut verifier_transcript = Transcript::new(b"RangeProofTest");
-    let mut verifier = Verifier::new(&mut verifier_transcript);
+    let mut verifier = Verifier::new(&pc_gens, &mut verifier_transcript);
 
     let var = verifier.commit(commitment);
 
@@ -449,5 +701,5 @@ fn range_proof_helper(v_val: u64, n: usize) -> Result<(), R1CSError> {
     assert!(range_proof(&mut verifier, var.into(), None, n).is_ok());
 
     // Verifier verifies proof
-    Ok(verifier.verify(&proof, &pc_gens, &bp_gens)?)
+    Ok(verifier.verify(&proof, &bp_gens)?)
 }

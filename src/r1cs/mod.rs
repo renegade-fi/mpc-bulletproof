@@ -9,7 +9,8 @@ mod prover;
 mod verifier;
 
 pub use self::constraint_system::{
-    ConstraintSystem, RandomizableConstraintSystem, RandomizedConstraintSystem, SparseReducedMatrix,
+    CircuitWeights, ConstraintSystem, RandomizableConstraintSystem, RandomizedConstraintSystem,
+    SparseReducedMatrix, SparseWeightRow,
 };
 pub use self::linear_combination::{LinearCombination, Variable};
 pub use self::proof::R1CSProof;

@@ -1,19 +1,46 @@
 //! Definition of the constraint system trait.
 
+use std::collections::HashSet;
+
 use super::{LinearCombination, R1CSError, Variable};
 use curve25519_dalek::scalar::Scalar;
 use merlin::Transcript;
 use serde::{Deserialize, Serialize};
 
-pub(crate) type SparseWeightRow = Vec<(usize, Scalar)>;
+#[derive(Serialize, Deserialize, Debug)]
+pub struct SparseWeightRow(pub Vec<(usize, Scalar)>);
 
-#[derive(Serialize, Deserialize, Default)]
-pub struct SparseReducedMatrix(Vec<SparseWeightRow>);
+impl PartialEq for SparseWeightRow {
+    fn eq(&self, other: &Self) -> bool {
+        // Because sparse constraint representation is constructed by iterating over (K, V) pairs
+        // of underlying linear combinations, order of terms in the matrix is not guaranteed.
+        // This is okay, because the matrix elements contain the index of the variable
+        // to which the given weight is applied, but requires us to have an
+        // ordering-agnostic equality relation
+        let a: HashSet<&(usize, Scalar)> = self.0.iter().collect();
+        let b: HashSet<&(usize, Scalar)> = other.0.iter().collect();
+
+        a == b
+    }
+}
+impl Eq for SparseWeightRow {}
+
+#[derive(Debug, Serialize, Deserialize, Default, PartialEq, Eq)]
+pub struct SparseReducedMatrix(pub Vec<SparseWeightRow>);
 
 impl Extend<SparseWeightRow> for SparseReducedMatrix {
     fn extend<T: IntoIterator<Item = SparseWeightRow>>(&mut self, iter: T) {
         self.0.extend(iter)
     }
+}
+
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
+pub struct CircuitWeights {
+    pub w_l: SparseReducedMatrix,
+    pub w_r: SparseReducedMatrix,
+    pub w_o: SparseReducedMatrix,
+    pub w_v: SparseReducedMatrix,
+    pub c: Vec<Scalar>,
 }
 
 /// The interface for a constraint system, abstracting over the prover
@@ -69,15 +96,7 @@ pub trait ConstraintSystem {
     ///
     /// Used so that the publicly-known "structure" of the constraint system
     /// can be exported
-    fn get_weights(
-        &self,
-    ) -> (
-        SparseReducedMatrix,
-        SparseReducedMatrix,
-        SparseReducedMatrix,
-        SparseReducedMatrix,
-        Vec<Scalar>,
-    );
+    fn get_weights(&self) -> CircuitWeights;
 
     /// Allocate a single variable.
     ///
