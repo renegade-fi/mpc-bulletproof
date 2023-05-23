@@ -142,7 +142,7 @@ impl LinearCombination {
         SparseWeightRow,
         SparseWeightRow,
         SparseWeightRow,
-        Scalar,
+        Option<Scalar>,
     ) {
         // Each LC can have up to `n` non-zero terms of each variable
         // and a single constant
@@ -151,30 +151,29 @@ impl LinearCombination {
         let mut w_r_row = SparseWeightRow(Vec::new());
         let mut w_o_row = SparseWeightRow(Vec::new());
         let mut w_v_row = SparseWeightRow(Vec::new());
-        let mut c = Scalar::zero();
+        let mut c = None;
 
-        for (&var, &coeff) in &self.terms {
-            if coeff != Scalar::zero() {
-                match var {
-                    Variable::MultiplierLeft(i) => {
-                        w_l_row.0.push((i, coeff));
-                    }
-                    Variable::MultiplierRight(i) => {
-                        w_r_row.0.push((i, coeff));
-                    }
-                    Variable::MultiplierOutput(i) => {
-                        w_o_row.0.push((i, coeff));
-                    }
-                    Variable::Committed(i) => {
-                        w_v_row.0.push((i, -coeff));
-                    }
-                    Variable::One() => {
-                        c = -coeff;
-                    }
-                    Variable::Zero() => {}
+        self.terms
+            .iter()
+            .filter(|(_, &coeff)| coeff != Scalar::zero())
+            .for_each(|(&var, &coeff)| match var {
+                Variable::MultiplierLeft(i) => {
+                    w_l_row.0.push((i, coeff));
                 }
-            }
-        }
+                Variable::MultiplierRight(i) => {
+                    w_r_row.0.push((i, coeff));
+                }
+                Variable::MultiplierOutput(i) => {
+                    w_o_row.0.push((i, coeff));
+                }
+                Variable::Committed(i) => {
+                    w_v_row.0.push((i, -coeff));
+                }
+                Variable::One() => {
+                    c = Some(-coeff);
+                }
+                Variable::Zero() => {}
+            });
 
         (w_l_row, w_r_row, w_o_row, w_v_row, c)
     }

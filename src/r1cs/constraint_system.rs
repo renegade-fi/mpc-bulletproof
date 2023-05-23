@@ -7,7 +7,7 @@ use curve25519_dalek::scalar::Scalar;
 use merlin::Transcript;
 use serde::{Deserialize, Serialize};
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Default)]
 pub struct SparseWeightRow(pub Vec<(usize, Scalar)>);
 
 impl PartialEq for SparseWeightRow {
@@ -25,6 +25,20 @@ impl PartialEq for SparseWeightRow {
 }
 impl Eq for SparseWeightRow {}
 
+// When extracting the weights from a [`LinearCombination`], it may or may not
+// have a constant term, which is represented by an `Option<Scalar>`.
+// When we try to unzip the weights collected from multiple [`LinearCombination`]s into a
+// [`CircuitWeights`] struct, we need to be able to extend a [`SparseWeightRow`] with a
+// `(usize, Option<Scalar>)` in order to build the `c` vector.
+impl Extend<(usize, Option<Scalar>)> for SparseWeightRow {
+    fn extend<T: IntoIterator<Item = (usize, Option<Scalar>)>>(&mut self, iter: T) {
+        self.0.extend(
+            iter.into_iter()
+                .filter_map(|(i, maybe_c_i)| maybe_c_i.map(|c_i| (i, c_i))),
+        )
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, Default, PartialEq, Eq)]
 pub struct SparseReducedMatrix(pub Vec<SparseWeightRow>);
 
@@ -40,7 +54,7 @@ pub struct CircuitWeights {
     pub w_r: SparseReducedMatrix,
     pub w_o: SparseReducedMatrix,
     pub w_v: SparseReducedMatrix,
-    pub c: Vec<Scalar>,
+    pub c: SparseWeightRow,
 }
 
 /// The interface for a constraint system, abstracting over the prover

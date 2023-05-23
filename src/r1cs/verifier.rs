@@ -78,9 +78,15 @@ impl<'t, 'g> ConstraintSystem for Verifier<'t, 'g> {
     fn get_weights(&self) -> CircuitWeights {
         // Extract sparse-reduced weights from each constraint to construct the matrices
         let (w_l, w_r, w_o, w_v, c) = self
+            // It's important that this iteration is in the correct order of the constraints,
+            // otherwise we'll write the wrong index for the given constant in a constraint
             .constraints
             .iter()
-            .map(|lc| lc.extract_weights())
+            .enumerate()
+            .map(|(i, lc)| {
+                let (w_l_row, w_r_row, w_o_row, w_v_row, c_i) = lc.extract_weights();
+                (w_l_row, w_r_row, w_o_row, w_v_row, (i, c_i))
+            })
             .multiunzip();
 
         CircuitWeights {
