@@ -447,71 +447,78 @@ lazy_static! {
     static ref EXAMPLE_GADGET_C1: u64 = 40;
     static ref EXAMPLE_GADGET_C2: u64 = 9;
 
-    // Constraints have form: w_L * a_L + w_R * a_R + w_O * a_O = w_V * v + c
-    // Constrains (a1 + a2) * (b1 + b2) = (c1 + c2)
-    // Under the hood of the example gadget:
-
-    // v[0] = a1
-    // v[1] = a2
-    // v[2] = b1
-    // v[3] = b2
-    // v[4] = c1
-
-    // a3 = eval(v[0] + v[1])
-    // a_L[0] = a3
-    // constraints[0] = (v[0] + v[1]) - a_L[0]
-
-    // b3 = eval(v[2] + v[3])
-    // a_R[0] = b3
-    // constraints[1] = (v[2] + v[3]) - a_R[0]
-
-    // o = a3 * b3
-    // a_O[0] = o
-
-    // constraints[2] = (v[4] + c2) - a_O[0]
-
-    // Thus, matrices should be:
-
     /*
-       w_L = [           [
-           [-1],            [(0, -1)]
-           [0],    =>       []
-           [0],             []
-       ]                 ]
-    */
+    Constraints are represented by the following matrix equation:
 
-    /*
-       w_R = [           [
-           [0],             []
-           [-1],    =>      [(0, -1)]
-           [0],             []
-       ]                 ]
-    */
+    w_L * a_L + w_R * a_R + w_O * a_O = w_V * v + c
 
-    /*
-       w_O = [           [
-           [0],             []
-           [0],    =>       []
-           [-1],            [(0, -1)]
-       ]                 ]
-    */
+    where w_{i} are weight matrices, a_{i} are multiplier gate variable vectors,
+    v is the vector of high-level witness variables, and c is the vector of constants.
 
-    /*
-       Weights here are negative b/c on RHS
-       w_V = [                         [
-           [-1, -1, 0, 0, 0],             [(0, -1), (1, -1)]
-           [0, 0, -1, -1, 0],    =>       [(2, -1), (3, -1)]
-           [0, 0, 0, 0, -1],              [(4, -1)]
-       ]                               ]
-    */
+    The example gadget constrains:
 
-    /*
-       Weights here are negative b/c on RHS
-       c = [
-           0,
-           0,
-           -c2
-       ]
+    (a1 + a2) * (b1 + b2) = (c1 + c2)
+
+    Where a1, a2, b1, b2, & c1 are high-level witness variables,
+    and c2 is a public constant.
+
+    Under the hood of the example gadget, we do more or less the following:
+    ```
+        v[0] = a1
+        v[1] = a2
+        v[2] = b1
+        v[3] = b2
+        v[4] = c1
+
+        a3 = eval(v[0] + v[1])
+        a_L[0] = a3
+        constraints[0] = (v[0] + v[1]) - a_L[0]
+
+        b3 = eval(v[2] + v[3])
+        a_R[0] = b3
+        constraints[1] = (v[2] + v[3]) - a_R[0]
+
+        o = a3 * b3
+        a_O[0] = o
+
+        constraints[2] = (v[4] + c2) - a_O[0]
+    ```
+
+    Thus, matrices (& c vector) representing this gadget should be:
+    ```
+        Original matrix:                Sparse-reduced matrix:
+
+        w_L = [                         [
+            [-1],                          [(0, -1)]
+            [0],                           []
+            [0],                           []
+        ]                               ]
+
+        w_R = [                         [
+            [0],                           []
+            [-1],                          [(0, -1)]
+            [0],                           []
+        ]                               ]
+
+        w_O = [                         [
+            [0],                           []
+            [0],                           []
+            [-1],                          [(0, -1)]
+        ]                               ]
+
+        Weights here are negative b/c on RHS of matrix equation
+        w_V = [                         [
+            [-1, -1, 0, 0, 0],             [(0, -1), (1, -1)]
+            [0, 0, -1, -1, 0],             [(2, -1), (3, -1)]
+            [0, 0, 0, 0, -1],              [(4, -1)]
+        ]                               ]
+
+        Weights here are negative b/c on RHS of matrix equation
+        c = [
+            0,
+            0,                          [(2, -c2)]
+            -c2,
+        ]
     */
 
     static ref EXAMPLE_GADGET_WEIGHTS: CircuitWeights = CircuitWeights {
@@ -535,7 +542,7 @@ lazy_static! {
             SparseWeightRow(vec![(2, -Scalar::one()), (3, -Scalar::one())]),
             SparseWeightRow(vec![(4, -Scalar::one())]),
         ]),
-        c: vec![Scalar::zero(), Scalar::zero(), -Scalar::from(*EXAMPLE_GADGET_C2)]
+        c: SparseWeightRow(vec![(2, -Scalar::from(*EXAMPLE_GADGET_C2))])
     };
 }
 
