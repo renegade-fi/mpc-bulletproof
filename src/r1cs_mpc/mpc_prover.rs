@@ -205,7 +205,7 @@ impl<'a, 't, 'g, N: MpcNetwork + Send, S: SharedValueSource<Scalar>> MpcProver<'
     }
 
     /// Helper method to borrow the MPC fabric
-    fn borrow_fabric(&self) -> Ref<AuthenticatedMpcFabric<N, S>> {
+    pub fn borrow_fabric(&self) -> Ref<AuthenticatedMpcFabric<N, S>> {
         self.mpc_fabric.as_ref().borrow()
     }
 
