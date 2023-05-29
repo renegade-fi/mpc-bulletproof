@@ -6,6 +6,7 @@ use curve25519_dalek::ristretto::{CompressedRistretto, RistrettoPoint};
 use curve25519_dalek::scalar::Scalar;
 use curve25519_dalek::traits::{Identity, MultiscalarMul};
 use merlin::Transcript;
+use mpc_ristretto::mpc_scalar::scalar_to_u64;
 
 use super::{
     ConstraintSystem, LinearCombination, R1CSProof, RandomizableConstraintSystem,
@@ -178,6 +179,11 @@ impl<'t, 'g> ConstraintSystem for Prover<'t, 'g> {
     fn constrain(&mut self, lc: LinearCombination) {
         // TODO: check that the linear combinations are valid
         // (e.g. that variables are valid, that the linear combination evals to 0 for prover, etc).
+        let eval = self.eval(&lc);
+        if eval.ne(&Scalar::zero()) {
+            println!("Non-zero eval: {}", scalar_to_u64(&eval));
+        }
+
         self.constraints.push(lc);
     }
 

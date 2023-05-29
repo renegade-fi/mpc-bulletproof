@@ -338,28 +338,7 @@ impl<'a, 't, 'g, N: 'a + MpcNetwork + Send, S: 'a + SharedValueSource<Scalar>>
         &self,
         lc: &MpcLinearCombination<N, S>,
     ) -> Result<AuthenticatedScalar<N, S>, MultiproverError> {
-        // Gather terms together for a batch multiplication
-        let mut coeffs = Vec::with_capacity(lc.terms.len());
-        let mut vals = Vec::with_capacity(lc.terms.len());
-
-        for (var, coeff) in lc.terms.iter() {
-            coeffs.push(coeff.clone());
-            vals.push({
-                match var.get_type() {
-                    Variable::MultiplierLeft(i) => self.a_L[i].to_owned(),
-                    Variable::MultiplierRight(i) => self.a_R[i].to_owned(),
-                    Variable::MultiplierOutput(i) => self.a_O[i].to_owned(),
-                    Variable::Committed(i) => self.v[i].to_owned(),
-                    Variable::One() => self.borrow_fabric().allocate_public_u64(1),
-                    Variable::Zero() => self.borrow_fabric().allocate_zero(),
-                }
-            })
-        }
-
-        Ok(AuthenticatedScalar::batch_mul(&coeffs, &vals)
-            .map_err(|err| MultiproverError::Mpc(MpcError::NetworkError(err)))?
-            .iter()
-            .sum())
+        self.eval_lc(lc)
     }
 }
 
@@ -484,7 +463,7 @@ impl<'a, 't, 'g, N: MpcNetwork + Send, S: SharedValueSource<Scalar>> MpcProver<'
         ))
     }
 
-    /// Commit a publically held value
+    /// Commit a publicly held value
     ///
     /// This assumes that all parties involved in the commitment are calling this method with
     /// the same value
@@ -534,6 +513,10 @@ impl<'a, 't, 'g, N: MpcNetwork + Send, S: SharedValueSource<Scalar>> MpcProver<'
             v_blinding.len(),
             "values and blinders must have equal length"
         );
+        if v.is_empty() {
+            return Ok((vec![], vec![]));
+        }
+
         let shared_values = self.borrow_fabric().batch_allocate_private_scalars(
             owning_party,
             &v.iter()
@@ -573,6 +556,10 @@ impl<'a, 't, 'g, N: MpcNetwork + Send, S: SharedValueSource<Scalar>> MpcProver<'
             v_blinding.len(),
             "values and blinders must have equal length"
         );
+
+        if v.is_empty() {
+            return Ok((vec![], vec![]));
+        }
 
         // Allocate the blinders as pre-shared values to create valid MACs
         // It is okay if the values are different from their shared values as
@@ -713,6 +700,51 @@ impl<'a, 't, 'g, N: MpcNetwork + Send, S: SharedValueSource<Scalar>> MpcProver<'
             }
             Ok(wrapped_self.prover)
         }
+    }
+
+    /// Evaluate a linear combination of allocated variables
+    pub fn eval_lc(
+        &self,
+        lc: &MpcLinearCombination<N, S>,
+    ) -> Result<AuthenticatedScalar<N, S>, MultiproverError> {
+        // Gather terms together for a batch multiplication
+        let mut coeffs = Vec::with_capacity(lc.terms.len());
+        let mut vals = Vec::with_capacity(lc.terms.len());
+
+        for (var, coeff) in lc.terms.iter() {
+            coeffs.push(coeff.clone());
+            vals.push({
+                match var.get_type() {
+                    Variable::MultiplierLeft(i) => self.a_L[i].to_owned(),
+                    Variable::MultiplierRight(i) => self.a_R[i].to_owned(),
+                    Variable::MultiplierOutput(i) => self.a_O[i].to_owned(),
+                    Variable::Committed(i) => self.v[i].to_owned(),
+                    Variable::One() => self.borrow_fabric().allocate_public_u64(1),
+                    Variable::Zero() => self.borrow_fabric().allocate_zero(),
+                }
+            })
+        }
+
+        Ok(AuthenticatedScalar::batch_mul(&coeffs, &vals)
+            .map_err(|err| MultiproverError::Mpc(MpcError::NetworkError(err)))?
+            .iter()
+            .sum())
+    }
+
+    /// Checks whether all the constraints are satisfied, does not prove the statement
+    pub fn constraints_satisfied(&self) -> Result<bool, MultiproverError> {
+        let mut evals = Vec::with_capacity(self.constraints.len());
+        for constraint in self.constraints.iter() {
+            evals.push(self.eval_lc(constraint)?);
+        }
+
+        // Check that all the constraints are satisfied
+        let constraint_evals = AuthenticatedScalar::batch_open(&evals)
+            .map_err(|err| MultiproverError::Mpc(MpcError::NetworkError(err)))?
+            .into_iter()
+            .map(|eval| eval.to_scalar())
+            .collect_vec();
+        Ok(constraint_evals.iter().all(|eval| *eval == Scalar::zero()))
     }
 
     /// Consume this `ConstraintSystem` and produce a shared proof
