@@ -1,29 +1,12 @@
 //! Definition of the constraint system trait.
 
-use std::collections::HashSet;
-
 use super::{LinearCombination, R1CSError, Variable};
 use curve25519_dalek::scalar::Scalar;
 use merlin::Transcript;
 use serde::{Deserialize, Serialize};
 
-#[derive(Serialize, Deserialize, Debug, Default)]
+#[derive(Serialize, Deserialize, Debug, Default, PartialEq, Eq)]
 pub struct SparseWeightRow(pub Vec<(usize, Scalar)>);
-
-impl PartialEq for SparseWeightRow {
-    fn eq(&self, other: &Self) -> bool {
-        // Because sparse constraint representation is constructed by iterating over (K, V) pairs
-        // of underlying linear combinations, order of terms in the matrix is not guaranteed.
-        // This is okay, because the matrix elements contain the index of the variable
-        // to which the given weight is applied, but requires us to have an
-        // ordering-agnostic equality relation
-        let a: HashSet<&(usize, Scalar)> = self.0.iter().collect();
-        let b: HashSet<&(usize, Scalar)> = other.0.iter().collect();
-
-        a == b
-    }
-}
-impl Eq for SparseWeightRow {}
 
 // When extracting the weights from a [`LinearCombination`], it may or may not
 // have a constant term, which is represented by an `Option<Scalar>`.
