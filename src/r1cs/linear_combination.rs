@@ -1,6 +1,7 @@
 //! Definition of linear combinations.
 
 use core::ops::{AddAssign, MulAssign, SubAssign};
+use itertools::Itertools;
 use std::collections::HashMap;
 use std::iter::FromIterator;
 use std::ops::{Add, Mul, Neg, Sub};
@@ -154,9 +155,20 @@ impl LinearCombination {
         let mut w_v_row = SparseWeightRow(Vec::new());
         let mut c = None;
 
+        // Iterating over the LC terms here has non-deterministic order.
+        // We want terms to be ordered by variable index, so we sort them
         self.terms
             .iter()
             .filter(|(_, &coeff)| coeff != Scalar::zero())
+            .sorted_by_key(|(&var, _)| match var {
+                Variable::MultiplierLeft(i) => i,
+                Variable::MultiplierRight(i) => i,
+                Variable::MultiplierOutput(i) => i,
+                Variable::Committed(i) => i,
+                // Sorting for constant variables is not necessary
+                Variable::One() => usize::MAX,
+                Variable::Zero() => usize::MAX,
+            })
             .for_each(|(&var, &coeff)| match var {
                 Variable::MultiplierLeft(i) => {
                     w_l_row.0.push((i, coeff));
