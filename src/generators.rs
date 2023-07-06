@@ -6,23 +6,16 @@
 
 extern crate alloc;
 
-use core::cell::Ref;
-
 use alloc::vec::Vec;
-use curve25519_dalek::constants::RISTRETTO_BASEPOINT_COMPRESSED;
-use curve25519_dalek::constants::RISTRETTO_BASEPOINT_POINT;
-use curve25519_dalek::ristretto::RistrettoPoint;
-use curve25519_dalek::scalar::Scalar;
-use curve25519_dalek::traits::MultiscalarMul;
 use digest::{ExtendableOutput, Input, XofReader};
-use mpc_ristretto::authenticated_ristretto::AuthenticatedRistretto;
-use mpc_ristretto::authenticated_scalar::AuthenticatedScalar;
-use mpc_ristretto::beaver::SharedValueSource;
-use mpc_ristretto::fabric::AuthenticatedMpcFabric;
-use mpc_ristretto::network::MpcNetwork;
-use sha3::{Sha3XofReader, Sha3_512, Shake256};
-
-use crate::r1cs_mpc::SharedMpcFabric;
+use mpc_stark::algebra::authenticated_scalar::AuthenticatedScalarResult;
+use mpc_stark::algebra::authenticated_stark_point::AuthenticatedStarkPointResult;
+use mpc_stark::algebra::scalar::Scalar;
+use mpc_stark::algebra::scalar::ScalarResult;
+use mpc_stark::algebra::stark_curve::StarkPoint;
+use mpc_stark::algebra::stark_curve::StarkPointResult;
+use mpc_stark::algebra::stark_curve::STARK_UNIFORM_BYTES;
+use sha3::{Sha3XofReader, Shake256};
 
 /// Represents a pair of base points for Pedersen commitments.
 ///
@@ -38,38 +31,41 @@ use crate::r1cs_mpc::SharedMpcFabric;
 #[derive(Copy, Clone)]
 pub struct PedersenGens {
     /// Base for the committed value
-    pub B: RistrettoPoint,
+    pub B: StarkPoint,
     /// Base for the blinding factor
-    pub B_blinding: RistrettoPoint,
+    pub B_blinding: StarkPoint,
 }
 
 impl PedersenGens {
     /// Creates a Pedersen commitment using the value scalar and a blinding factor.
-    pub fn commit(&self, value: Scalar, blinding: Scalar) -> RistrettoPoint {
-        RistrettoPoint::multiscalar_mul(&[value, blinding], &[self.B, self.B_blinding])
+    pub fn commit(&self, value: Scalar, blinder: Scalar) -> StarkPoint {
+        self.B * value + self.B_blinding * blinder
+    }
+
+    /// Creates a Pedersen commitment using the value scalar and a blinding factor represented
+    /// as results in a computation graph
+    pub fn commit_result(&self, value: &ScalarResult, blinder: &ScalarResult) -> StarkPointResult {
+        self.B * value + self.B_blinding * blinder
     }
 
     /// Creates a Pedersen commitment using a shared scalar value and blinding factor.
-    pub fn commit_shared<N, S>(
+    pub fn commit_shared(
         &self,
-        value: &AuthenticatedScalar<N, S>,
-        blinding: &AuthenticatedScalar<N, S>,
-    ) -> AuthenticatedRistretto<N, S>
-    where
-        N: MpcNetwork + Send,
-        S: SharedValueSource<Scalar>,
-    {
+        value: &AuthenticatedScalarResult,
+        blinding: &ScalarResult,
+    ) -> AuthenticatedStarkPointResult {
         value * self.B + blinding * self.B_blinding
     }
 }
 
 impl Default for PedersenGens {
     fn default() -> Self {
+        // We use the Stark curve's basepoint directly for both group generators as
+        // in the original implementation over the Ristretto curve:
+        //  https://github.com/dalek-cryptography/bulletproofs/blob/main/src/generators.rs#L44
         PedersenGens {
-            B: RISTRETTO_BASEPOINT_POINT,
-            B_blinding: RistrettoPoint::hash_from_bytes::<Sha3_512>(
-                RISTRETTO_BASEPOINT_COMPRESSED.as_bytes(),
-            ),
+            B: StarkPoint::generator(),
+            B_blinding: StarkPoint::generator(),
         }
     }
 }
@@ -97,7 +93,7 @@ impl GeneratorsChain {
     /// the result.
     fn fast_forward(mut self, n: usize) -> Self {
         for _ in 0..n {
-            let mut buf = [0u8; 64];
+            let mut buf = [0u8; STARK_UNIFORM_BYTES];
             self.reader.read(&mut buf);
         }
         self
@@ -111,13 +107,20 @@ impl Default for GeneratorsChain {
 }
 
 impl Iterator for GeneratorsChain {
-    type Item = RistrettoPoint;
+    type Item = StarkPoint;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let mut uniform_bytes = [0u8; 64];
+        let mut uniform_bytes = [0u8; STARK_UNIFORM_BYTES];
         self.reader.read(&mut uniform_bytes);
 
-        Some(RistrettoPoint::from_uniform_bytes(&uniform_bytes))
+        // TODO: The inputs to the hash-to-curve algorithm here are public, so we may be able to
+        // optimize this by providing a hash-to-curve method that fails to hide the input
+        // https://eprint.iacr.org/2009/226.pdf and https://link.springer.com/chapter/10.1007/978-3-642-14623-7_13
+        // provide examples of such schemes
+        Some(
+            StarkPoint::from_uniform_bytes(uniform_bytes)
+                .expect("error deserializing point from random bytes"),
+        )
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
@@ -158,9 +161,9 @@ pub struct BulletproofGens {
     /// Number of values or parties
     pub party_capacity: usize,
     /// Precomputed \\(\mathbf G\\) generators for each party.
-    G_vec: Vec<Vec<RistrettoPoint>>,
+    G_vec: Vec<Vec<StarkPoint>>,
     /// Precomputed \\(\mathbf H\\) generators for each party.
-    H_vec: Vec<Vec<RistrettoPoint>>,
+    H_vec: Vec<Vec<StarkPoint>>,
 }
 
 impl BulletproofGens {
@@ -198,15 +201,8 @@ impl BulletproofGens {
 
     /// Returns a view of the generator chain that allocates generators
     /// as public curve points within an MPC network
-    pub fn as_mpc_values<N, S>(
-        &self,
-        fabric: SharedMpcFabric<N, S>,
-    ) -> AuthenticatedBulletproofGens<N, S>
-    where
-        N: MpcNetwork + Send,
-        S: SharedValueSource<Scalar>,
-    {
-        AuthenticatedBulletproofGens { gens: self, fabric }
+    pub fn as_mpc_values(&self) -> AuthenticatedBulletproofGens {
+        AuthenticatedBulletproofGens { gens: self }
     }
 
     /// Increases the generators' capacity to the amount specified.
@@ -239,7 +235,8 @@ impl BulletproofGens {
     }
 
     /// Return an iterator over the aggregation of the parties' G generators with given size `n`.
-    pub(crate) fn G(&self, n: usize, m: usize) -> impl Iterator<Item = &RistrettoPoint> {
+    #[cfg(test)]
+    pub(crate) fn G(&self, n: usize, m: usize) -> impl Iterator<Item = &StarkPoint> {
         AggregatedGensIter {
             n,
             m,
@@ -250,7 +247,8 @@ impl BulletproofGens {
     }
 
     /// Return an iterator over the aggregation of the parties' H generators with given size `n`.
-    pub(crate) fn H(&self, n: usize, m: usize) -> impl Iterator<Item = &RistrettoPoint> {
+    #[cfg(test)]
+    pub(crate) fn H(&self, n: usize, m: usize) -> impl Iterator<Item = &StarkPoint> {
         AggregatedGensIter {
             n,
             m,
@@ -262,7 +260,7 @@ impl BulletproofGens {
 }
 
 struct AggregatedGensIter<'a> {
-    array: &'a Vec<Vec<RistrettoPoint>>,
+    array: &'a Vec<Vec<StarkPoint>>,
     n: usize,
     m: usize,
     party_idx: usize,
@@ -270,7 +268,7 @@ struct AggregatedGensIter<'a> {
 }
 
 impl<'a> Iterator for AggregatedGensIter<'a> {
-    type Item = &'a RistrettoPoint;
+    type Item = &'a StarkPoint;
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.gen_idx >= self.n {
@@ -311,12 +309,12 @@ pub struct BulletproofGensShare<'a> {
 
 impl<'a> BulletproofGensShare<'a> {
     /// Return an iterator over this party's G generators with given size `n`.
-    pub fn G(&self, n: usize) -> impl Iterator<Item = &'a RistrettoPoint> {
+    pub fn G(&self, n: usize) -> impl Iterator<Item = &'a StarkPoint> {
         self.gens.G_vec[self.share].iter().take(n)
     }
 
     /// Return an iterator over this party's H generators with given size `n`.
-    pub fn H(&self, n: usize) -> impl Iterator<Item = &'a RistrettoPoint> {
+    pub fn H(&self, n: usize) -> impl Iterator<Item = &'a StarkPoint> {
         self.gens.H_vec[self.share].iter().take(n)
     }
 }
@@ -326,43 +324,24 @@ impl<'a> BulletproofGensShare<'a> {
 /// This allows for the generators to be used more easily in algebraic expressions
 /// with other network allocated values.
 #[derive(Clone)]
-pub struct AuthenticatedBulletproofGens<'a, N: MpcNetwork + Send, S: SharedValueSource<Scalar>> {
+pub struct AuthenticatedBulletproofGens<'a> {
     /// The parent object that this is a view into
     gens: &'a BulletproofGens,
-    /// The Mpc fabric used to allocate values in
-    fabric: SharedMpcFabric<N, S>,
 }
 
-impl<'a, N: MpcNetwork + Send, S: SharedValueSource<Scalar>>
-    AuthenticatedBulletproofGens<'a, N, S>
-{
-    /// A convenience method to borrow the MPC fabric
-    fn borrow_fabric(&self) -> Ref<AuthenticatedMpcFabric<N, S>> {
-        self.fabric.as_ref().borrow()
-    }
-
+impl<'a> AuthenticatedBulletproofGens<'a> {
     /// Return an iterator over G generators viewed as `AuthenticatedRistretto`s with given size `n`.
-    pub fn G(&self, n: usize) -> impl Iterator<Item = AuthenticatedRistretto<N, S>> {
+    pub fn G(&self, n: usize) -> impl Iterator<Item = &'a StarkPoint> {
         // It is necessary to materialize the mapping via collect to release the borrow on
         // the mpc fabric that is leased in the map closure.
-        self.gens.G_vec[0]
-            .iter()
-            .map(|g| self.borrow_fabric().allocate_public_ristretto(*g))
-            .collect::<Vec<AuthenticatedRistretto<N, S>>>()
-            .into_iter()
-            .take(n)
+        self.gens.G_vec[0].iter().take(n)
     }
 
     /// Return an iterator over H generators viewed as `AuthenticatedRistretto`s with given size `n`.
-    pub(crate) fn H(&self, n: usize) -> impl Iterator<Item = AuthenticatedRistretto<N, S>> {
+    pub(crate) fn H(&self, n: usize) -> impl Iterator<Item = &'a StarkPoint> {
         // It is necessary to materialize the mapping via collect to release the borrow on
         // the mpc fabric that is leased in the map closure.
-        self.gens.H_vec[0]
-            .iter()
-            .map(|h| self.borrow_fabric().allocate_public_ristretto(*h))
-            .collect::<Vec<AuthenticatedRistretto<N, S>>>()
-            .into_iter()
-            .take(n)
+        self.gens.H_vec[0].iter().take(n)
     }
 }
 
@@ -375,8 +354,8 @@ mod tests {
         let gens = BulletproofGens::new(64, 8);
 
         let helper = |n: usize, m: usize| {
-            let agg_G: Vec<RistrettoPoint> = gens.G(n, m).cloned().collect();
-            let flat_G: Vec<RistrettoPoint> = gens
+            let agg_G: Vec<StarkPoint> = gens.G(n, m).cloned().collect();
+            let flat_G: Vec<StarkPoint> = gens
                 .G_vec
                 .iter()
                 .take(m)
@@ -384,8 +363,8 @@ mod tests {
                 .cloned()
                 .collect();
 
-            let agg_H: Vec<RistrettoPoint> = gens.H(n, m).cloned().collect();
-            let flat_H: Vec<RistrettoPoint> = gens
+            let agg_H: Vec<StarkPoint> = gens.H(n, m).cloned().collect();
+            let flat_H: Vec<StarkPoint> = gens
                 .H_vec
                 .iter()
                 .take(m)
@@ -419,11 +398,11 @@ mod tests {
         gen_resized.increase_capacity(64);
 
         let helper = |n: usize, m: usize| {
-            let gens_G: Vec<RistrettoPoint> = gens.G(n, m).cloned().collect();
-            let gens_H: Vec<RistrettoPoint> = gens.H(n, m).cloned().collect();
+            let gens_G: Vec<StarkPoint> = gens.G(n, m).cloned().collect();
+            let gens_H: Vec<StarkPoint> = gens.H(n, m).cloned().collect();
 
-            let resized_G: Vec<RistrettoPoint> = gen_resized.G(n, m).cloned().collect();
-            let resized_H: Vec<RistrettoPoint> = gen_resized.H(n, m).cloned().collect();
+            let resized_G: Vec<StarkPoint> = gen_resized.G(n, m).cloned().collect();
+            let resized_H: Vec<StarkPoint> = gen_resized.H(n, m).cloned().collect();
 
             assert_eq!(gens_G, resized_G);
             assert_eq!(gens_H, resized_H);

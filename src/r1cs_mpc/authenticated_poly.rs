@@ -12,59 +12,55 @@ use core::panic;
 use alloc::vec::Vec;
 use clear_on_drop::clear::Clear;
 use curve25519_dalek::scalar::Scalar;
-use mpc_ristretto::authenticated_scalar::AuthenticatedScalar;
-use mpc_ristretto::beaver::SharedValueSource;
-use mpc_ristretto::network::MpcNetwork;
-
-use super::mpc_prover::SharedMpcFabric;
+use mpc_stark::{algebra::authenticated_scalar::AuthenticatedScalarResult, fabric::MpcFabric};
 
 /// Represents a degree-1 vector polynomial \\(\mathbf{a} + \mathbf{b} \cdot x\\).
-pub struct AuthenticatedVecPoly1<N: MpcNetwork + Send, S: SharedValueSource<Scalar>>(
-    pub Vec<AuthenticatedScalar<N, S>>,
-    pub Vec<AuthenticatedScalar<N, S>>,
+pub struct AuthenticatedVecPoly1(
+    pub Vec<AuthenticatedScalarResult>,
+    pub Vec<AuthenticatedScalarResult>,
 );
 
 /// Represents a degree-3 vector polynomial
 /// \\(\mathbf{a} + \mathbf{b} \cdot x + \mathbf{c} \cdot x^2 + \mathbf{d} \cdot x^3 \\).
 #[cfg(feature = "multiprover")]
-pub struct AuthenticatedVecPoly3<N: MpcNetwork + Send, S: SharedValueSource<Scalar>>(
-    pub Vec<AuthenticatedScalar<N, S>>,
-    pub Vec<AuthenticatedScalar<N, S>>,
-    pub Vec<AuthenticatedScalar<N, S>>,
-    pub Vec<AuthenticatedScalar<N, S>>,
+pub struct AuthenticatedVecPoly3(
+    pub Vec<AuthenticatedScalarResult>,
+    pub Vec<AuthenticatedScalarResult>,
+    pub Vec<AuthenticatedScalarResult>,
+    pub Vec<AuthenticatedScalarResult>,
 );
 
 /// Represents a degree-2 scalar polynomial \\(a + b \cdot x + c \cdot x^2\\)
-pub struct AuthenticatedPoly2<N: MpcNetwork + Send, S: SharedValueSource<Scalar>>(
-    pub AuthenticatedScalar<N, S>,
-    pub AuthenticatedScalar<N, S>,
-    pub AuthenticatedScalar<N, S>,
+pub struct AuthenticatedPoly2(
+    pub AuthenticatedScalarResult,
+    pub AuthenticatedScalarResult,
+    pub AuthenticatedScalarResult,
 );
 
 /// Represents a degree-6 scalar polynomial, without the zeroth degree
 /// \\(a \cdot x + b \cdot x^2 + c \cdot x^3 + d \cdot x^4 + e \cdot x^5 + f \cdot x^6\\)
 #[allow(missing_docs)]
-pub struct AuthenticatedPoly6<N: MpcNetwork + Send, S: SharedValueSource<Scalar>> {
-    pub t1: AuthenticatedScalar<N, S>,
-    pub t2: AuthenticatedScalar<N, S>,
-    pub t3: AuthenticatedScalar<N, S>,
-    pub t4: AuthenticatedScalar<N, S>,
-    pub t5: AuthenticatedScalar<N, S>,
-    pub t6: AuthenticatedScalar<N, S>,
+pub struct AuthenticatedPoly6 {
+    pub t1: AuthenticatedScalarResult,
+    pub t2: AuthenticatedScalarResult,
+    pub t3: AuthenticatedScalarResult,
+    pub t4: AuthenticatedScalarResult,
+    pub t5: AuthenticatedScalarResult,
+    pub t6: AuthenticatedScalarResult,
 }
 
-/// Provides an iterator over the powers of a `AuthenticatedScalar<N, S>`.
+/// Provides an iterator over the powers of a `AuthenticatedScalarResult`.
 ///
 /// This struct is created by the `exp_iter` function.
-pub struct AuthenticatedScalarExp<N: MpcNetwork + Send, S: SharedValueSource<Scalar>> {
-    x: AuthenticatedScalar<N, S>,
-    next_exp_x: AuthenticatedScalar<N, S>,
+pub struct AuthenticatedScalarExp {
+    x: AuthenticatedScalarResult,
+    next_exp_x: AuthenticatedScalarResult,
 }
 
-impl<N: MpcNetwork + Send, S: SharedValueSource<Scalar>> Iterator for AuthenticatedScalarExp<N, S> {
-    type Item = AuthenticatedScalar<N, S>;
+impl Iterator for AuthenticatedScalarExp {
+    type Item = AuthenticatedScalarResult;
 
-    fn next(&mut self) -> Option<AuthenticatedScalar<N, S>> {
+    fn next(&mut self) -> Option<AuthenticatedScalarResult> {
         let exp_x = self.next_exp_x.clone();
         self.next_exp_x = &self.next_exp_x * &self.x;
         Some(exp_x)
@@ -76,14 +72,10 @@ impl<N: MpcNetwork + Send, S: SharedValueSource<Scalar>> Iterator for Authentica
 }
 
 /// Return an iterator of the powers of `x`.
-pub fn authenticated_exp_iter<N, S>(
-    x: AuthenticatedScalar<N, S>,
-    fabric: SharedMpcFabric<N, S>,
-) -> AuthenticatedScalarExp<N, S>
-where
-    N: MpcNetwork + Send,
-    S: SharedValueSource<Scalar>,
-{
+pub fn authenticated_exp_iter(
+    x: AuthenticatedScalarResult,
+    fabric: MpcFabric,
+) -> AuthenticatedScalarExp {
     let next_exp_x = fabric
         .as_ref()
         .borrow()
@@ -93,14 +85,10 @@ where
 }
 
 /// Add two vectors of `AuthenticatedScalar`s.
-pub fn add_vec<N, S>(
-    a: &[AuthenticatedScalar<N, S>],
-    b: &[AuthenticatedScalar<N, S>],
-) -> Vec<AuthenticatedScalar<N, S>>
-where
-    N: MpcNetwork + Send,
-    S: SharedValueSource<Scalar>,
-{
+pub fn add_vec(
+    a: &[AuthenticatedScalarResult],
+    b: &[AuthenticatedScalarResult],
+) -> Vec<AuthenticatedScalarResult> {
     if a.len() != b.len() {
         panic!("Invalid vector lengths for add_vec");
     }
@@ -112,14 +100,10 @@ where
 }
 
 /// Compute the inner product of two vectors of `AuthenticatedScalar`s.
-pub fn authenticated_scalar_inner_product<N, S>(
-    a: &[AuthenticatedScalar<N, S>],
-    b: &[AuthenticatedScalar<N, S>],
-) -> AuthenticatedScalar<N, S>
-where
-    N: MpcNetwork + Send,
-    S: SharedValueSource<Scalar>,
-{
+pub fn authenticated_scalar_inner_product(
+    a: &[AuthenticatedScalarResult],
+    b: &[AuthenticatedScalarResult],
+) -> AuthenticatedScalarResult {
     if a.len() != b.len() || a.is_empty() {
         panic!("invalid vector lengths for inner product");
     }
@@ -133,10 +117,10 @@ where
     out
 }
 
-impl<N: MpcNetwork + Send, S: SharedValueSource<Scalar>> AuthenticatedVecPoly1<N, S> {
+impl AuthenticatedVecPoly1 {
     /// Constructs the zero polynomial over the field of `AuthenticatedScalar`s represented
     /// as a degree 1 polynomial
-    pub fn zero(n: usize, fabric: SharedMpcFabric<N, S>) -> Self {
+    pub fn zero(n: usize, fabric: MpcFabric) -> Self {
         let fabric_borrow = fabric.as_ref().borrow();
         AuthenticatedVecPoly1(
             fabric_borrow.allocate_zeros(n),
@@ -145,7 +129,7 @@ impl<N: MpcNetwork + Send, S: SharedValueSource<Scalar>> AuthenticatedVecPoly1<N
     }
 
     /// Returns the inner product of two vectors of degree 1 polynomials
-    pub fn inner_product(&self, rhs: &AuthenticatedVecPoly1<N, S>) -> AuthenticatedPoly2<N, S> {
+    pub fn inner_product(&self, rhs: &AuthenticatedVecPoly1) -> AuthenticatedPoly2 {
         // Uses Karatsuba's method
         let l = self;
         let r = rhs;
@@ -162,18 +146,18 @@ impl<N: MpcNetwork + Send, S: SharedValueSource<Scalar>> AuthenticatedVecPoly1<N
     }
 
     /// Evaluates the polynomial at `x`
-    pub fn eval(&self, x: AuthenticatedScalar<N, S>) -> Vec<AuthenticatedScalar<N, S>> {
+    pub fn eval(&self, x: AuthenticatedScalarResult) -> Vec<AuthenticatedScalarResult> {
         let n = self.0.len();
         (0..n)
             .map(|i| &self.0[i] + &x * &self.1[i])
-            .collect::<Vec<AuthenticatedScalar<N, S>>>()
+            .collect::<Vec<AuthenticatedScalarResult>>()
     }
 }
 
-impl<N: MpcNetwork + Send, S: SharedValueSource<Scalar>> AuthenticatedVecPoly3<N, S> {
+impl AuthenticatedVecPoly3 {
     /// Returns the zero polynomial over the field of `AuthenticatedScalar`s represented
     /// as a degree 3 polynomial
-    pub fn zero(n: usize, fabric: SharedMpcFabric<N, S>) -> Self {
+    pub fn zero(n: usize, fabric: MpcFabric) -> Self {
         let fabric_borrow = fabric.as_ref().borrow();
         AuthenticatedVecPoly3(
             fabric_borrow.allocate_zeros(n),
@@ -187,7 +171,7 @@ impl<N: MpcNetwork + Send, S: SharedValueSource<Scalar>> AuthenticatedVecPoly3<N
     /// - `lhs.0` is zero;
     /// - `rhs.2` is zero;
     /// This is the case in the constraint system proof.
-    pub fn special_inner_product(lhs: &Self, rhs: &Self) -> AuthenticatedPoly6<N, S> {
+    pub fn special_inner_product(lhs: &Self, rhs: &Self) -> AuthenticatedPoly6 {
         // TODO: make checks that l_poly.0 and r_poly.2 are zero.
 
         let t1 = authenticated_scalar_inner_product(&lhs.1, &rhs.0);
@@ -211,29 +195,29 @@ impl<N: MpcNetwork + Send, S: SharedValueSource<Scalar>> AuthenticatedVecPoly3<N
     }
 
     /// Evaluates the polynomial at `x`
-    pub fn eval(&self, x: &AuthenticatedScalar<N, S>) -> Vec<AuthenticatedScalar<N, S>> {
+    pub fn eval(&self, x: &AuthenticatedScalarResult) -> Vec<AuthenticatedScalarResult> {
         (0..self.0.len())
             .map(|i| &self.0[i] + x * (&self.1[i] + x * (&self.2[i] + x * &self.3[i])))
-            .collect::<Vec<AuthenticatedScalar<N, S>>>()
+            .collect::<Vec<AuthenticatedScalarResult>>()
     }
 }
 
-impl<N: MpcNetwork + Send, S: SharedValueSource<Scalar>> AuthenticatedPoly2<N, S> {
+impl AuthenticatedPoly2 {
     /// Evaluates the polynomial at `x`
-    pub fn eval(&self, x: &AuthenticatedScalar<N, S>) -> AuthenticatedScalar<N, S> {
+    pub fn eval(&self, x: &AuthenticatedScalarResult) -> AuthenticatedScalarResult {
         &self.0 + x * (&self.1 + x * &self.2)
     }
 }
 
-impl<N: MpcNetwork + Send, S: SharedValueSource<Scalar>> AuthenticatedPoly6<N, S> {
+impl AuthenticatedPoly6 {
     /// Evaluates the polynomial at `x`
-    pub fn eval(&self, x: &AuthenticatedScalar<N, S>) -> AuthenticatedScalar<N, S> {
+    pub fn eval(&self, x: &AuthenticatedScalarResult) -> AuthenticatedScalarResult {
         x * (&self.t1
             + x * (&self.t2 + x * (&self.t3 + x * (&self.t4 + x * (&self.t5 + x * &self.t6)))))
     }
 }
 
-impl<N: MpcNetwork + Send, S: SharedValueSource<Scalar>> Drop for AuthenticatedVecPoly1<N, S> {
+impl Drop for AuthenticatedVecPoly1 {
     fn drop(&mut self) {
         for e in self.0.iter_mut() {
             (&mut (*e)).clear();
@@ -244,7 +228,7 @@ impl<N: MpcNetwork + Send, S: SharedValueSource<Scalar>> Drop for AuthenticatedV
     }
 }
 
-impl<N: MpcNetwork + Send, S: SharedValueSource<Scalar>> Drop for AuthenticatedPoly2<N, S> {
+impl Drop for AuthenticatedPoly2 {
     fn drop(&mut self) {
         (&mut self.0).clear();
         (&mut self.1).clear();
@@ -252,7 +236,7 @@ impl<N: MpcNetwork + Send, S: SharedValueSource<Scalar>> Drop for AuthenticatedP
     }
 }
 
-impl<N: MpcNetwork + Send, S: SharedValueSource<Scalar>> Drop for AuthenticatedVecPoly3<N, S> {
+impl Drop for AuthenticatedVecPoly3 {
     fn drop(&mut self) {
         for e in self.0.iter_mut() {
             (&mut (*e)).clear();
@@ -269,7 +253,7 @@ impl<N: MpcNetwork + Send, S: SharedValueSource<Scalar>> Drop for AuthenticatedV
     }
 }
 
-impl<N: MpcNetwork + Send, S: SharedValueSource<Scalar>> Drop for AuthenticatedPoly6<N, S> {
+impl Drop for AuthenticatedPoly6 {
     fn drop(&mut self) {
         (&mut self.t1).clear();
         (&mut self.t2).clear();
@@ -283,15 +267,11 @@ impl<N: MpcNetwork + Send, S: SharedValueSource<Scalar>> Drop for AuthenticatedP
 /// Raises `x` to the power `n` using binary exponentiation,
 /// with (1 to 2)*lg(n) scalar multiplications.
 /// TODO: a consttime version of this would be awfully similar to a Montgomery ladder.
-pub fn authenticated_scalar_exp_vartime<N, S>(
-    x: &AuthenticatedScalar<N, S>,
+pub fn authenticated_scalar_exp_vartime(
+    x: &AuthenticatedScalarResult,
     mut n: u64,
-    fabric: SharedMpcFabric<N, S>,
-) -> AuthenticatedScalar<N, S>
-where
-    N: MpcNetwork + Send,
-    S: SharedValueSource<Scalar>,
-{
+    fabric: MpcFabric,
+) -> AuthenticatedScalarResult {
     let mut result = fabric
         .as_ref()
         .borrow()
@@ -316,15 +296,11 @@ where
 /// If `n` is a power of 2, it uses the efficient algorithm with `2*lg n` multiplications and additions.
 /// If `n` is not a power of 2, it uses the slow algorithm with `n` multiplications and additions.
 /// In the Bulletproofs case, all calls to `sum_of_powers` should have `n` as a power of 2.
-pub fn authenticated_sum_of_powers<N, S>(
-    x: &AuthenticatedScalar<N, S>,
+pub fn authenticated_sum_of_powers(
+    x: &AuthenticatedScalarResult,
     n: usize,
-    fabric: SharedMpcFabric<N, S>,
-) -> AuthenticatedScalar<N, S>
-where
-    N: MpcNetwork + Send,
-    S: SharedValueSource<Scalar>,
-{
+    fabric: MpcFabric,
+) -> AuthenticatedScalarResult {
     if !n.is_power_of_two() {
         return authenticated_sum_of_powers_slow(x, n, fabric);
     }
@@ -343,15 +319,11 @@ where
 }
 
 // takes the sum of all of the powers of x, up to n
-fn authenticated_sum_of_powers_slow<N, S>(
-    x: &AuthenticatedScalar<N, S>,
+fn authenticated_sum_of_powers_slow(
+    x: &AuthenticatedScalarResult,
     n: usize,
-    fabric: SharedMpcFabric<N, S>,
-) -> AuthenticatedScalar<N, S>
-where
-    N: MpcNetwork + Send,
-    S: SharedValueSource<Scalar>,
-{
+    fabric: MpcFabric,
+) -> AuthenticatedScalarResult {
     if n == 0 {
         return fabric.as_ref().borrow().allocate_public_u64(0);
     }
@@ -372,8 +344,7 @@ mod tests {
 
     use alloc::rc::Rc;
     use async_trait::async_trait;
-    use curve25519_dalek::ristretto::RistrettoPoint;
-    use mpc_ristretto::{error::MpcNetworkError, fabric::AuthenticatedMpcFabric};
+    use mpc_stark::{beaver::SharedValueSource, network::MpcNetwork};
 
     use crate::inner_product_proof::inner_product;
 
@@ -389,7 +360,7 @@ mod tests {
         }
     }
 
-    impl SharedValueSource<Scalar> for DummySharedScalarSource {
+    impl SharedValueSource for DummySharedScalarSource {
         fn next_shared_bit(&mut self) -> Scalar {
             Scalar::one()
         }
@@ -422,59 +393,14 @@ mod tests {
         fn party_id(&self) -> u64 {
             0
         }
-
-        async fn send_bytes(&mut self, _: &[u8]) -> Result<(), MpcNetworkError> {
-            Ok(())
-        }
-
-        async fn receive_bytes(&mut self) -> Result<Vec<u8>, MpcNetworkError> {
-            unimplemented!("not used in testing")
-        }
-
-        async fn send_scalars(&mut self, _: &[Scalar]) -> Result<(), MpcNetworkError> {
-            Ok(())
-        }
-
-        async fn receive_scalars(&mut self, _: usize) -> Result<Vec<Scalar>, MpcNetworkError> {
-            Ok(vec![])
-        }
-
-        async fn broadcast_points(
-            &mut self,
-            points: &[RistrettoPoint],
-        ) -> Result<Vec<RistrettoPoint>, MpcNetworkError> {
-            Ok(points.to_vec())
-        }
-
-        async fn send_points(&mut self, _: &[RistrettoPoint]) -> Result<(), MpcNetworkError> {
-            Ok(())
-        }
-
-        async fn receive_points(
-            &mut self,
-            _: usize,
-        ) -> Result<Vec<RistrettoPoint>, MpcNetworkError> {
-            Ok(vec![])
-        }
-
-        async fn broadcast_scalars(
-            &mut self,
-            scalars: &[Scalar],
-        ) -> Result<Vec<Scalar>, MpcNetworkError> {
-            Ok(scalars.to_vec())
-        }
-
-        async fn close(&mut self) -> Result<(), MpcNetworkError> {
-            Ok(())
-        }
     }
 
-    fn create_mock_fabric() -> SharedMpcFabric<DummyMpcNetwork, DummySharedScalarSource> {
-        Rc::new(RefCell::new(AuthenticatedMpcFabric::new_with_network(
+    fn create_mock_fabric() -> MpcFabric {
+        MpcFabric::new_with_network(
             0,
             Rc::new(RefCell::new(DummyMpcNetwork::new())),
             Rc::new(RefCell::new(DummySharedScalarSource::new())),
-        )))
+        )
     }
 
     #[test]

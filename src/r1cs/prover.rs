@@ -1,12 +1,9 @@
 #![allow(non_snake_case)]
 
-use clear_on_drop::clear::Clear;
-
-use curve25519_dalek::ristretto::{CompressedRistretto, RistrettoPoint};
-use curve25519_dalek::scalar::Scalar;
-use curve25519_dalek::traits::{Identity, MultiscalarMul};
 use itertools::Itertools;
 use merlin::Transcript;
+use mpc_stark::algebra::scalar::Scalar;
+use mpc_stark::algebra::stark_curve::StarkPoint;
 
 use super::{
     CircuitWeights, ConstraintSystem, LinearCombination, R1CSProof, RandomizableConstraintSystem,
@@ -61,30 +58,6 @@ pub struct Prover<'t, 'g> {
 /// the callback provided to `specify_randomized_constraints`.
 pub struct RandomizingProver<'t, 'g> {
     prover: Prover<'t, 'g>,
-}
-
-/// Overwrite secrets with null bytes when they go out of scope.
-impl<'t, 'g> Drop for Prover<'t, 'g> {
-    fn drop(&mut self) {
-        self.v.clear();
-        self.v_blinding.clear();
-
-        // Important: due to how ClearOnDrop auto-implements InitializableFromZeroed
-        // for T: Default, calling .clear() on Vec compiles, but does not
-        // clear the content. Instead, it only clears the Vec's header.
-        // Clearing the underlying buffer item-by-item will do the job, but will
-        // keep the header as-is, which is fine since the header does not contain secrets.
-        for e in self.a_L.iter_mut() {
-            e.clear();
-        }
-        for e in self.a_R.iter_mut() {
-            e.clear();
-        }
-        for e in self.a_O.iter_mut() {
-            e.clear();
-        }
-        // XXX use ClearOnDrop instead of doing the above
-    }
 }
 
 impl<'t, 'g> ConstraintSystem for Prover<'t, 'g> {
@@ -200,8 +173,6 @@ impl<'t, 'g> ConstraintSystem for Prover<'t, 'g> {
     }
 
     fn constrain(&mut self, lc: LinearCombination) {
-        // TODO: check that the linear combinations are valid
-        // (e.g. that variables are valid, that the linear combination evals to 0 for prover, etc).
         self.constraints.push(lc);
     }
 
@@ -345,13 +316,13 @@ impl<'t, 'g> Prover<'t, 'g> {
     ///
     /// Returns a pair of a Pedersen commitment (as a compressed Ristretto point),
     /// and a [`Variable`] corresponding to it, which can be used to form constraints.
-    pub fn commit(&mut self, v: Scalar, v_blinding: Scalar) -> (CompressedRistretto, Variable) {
+    pub fn commit(&mut self, v: Scalar, v_blinding: Scalar) -> (StarkPoint, Variable) {
         let i = self.v.len();
         self.v.push(v);
         self.v_blinding.push(v_blinding);
 
         // Add the commitment to the transcript.
-        let V = self.pc_gens.commit(v, v_blinding).compress();
+        let V = self.pc_gens.commit(v, v_blinding);
         self.transcript.append_point(b"V", &V);
 
         (V, Variable::Committed(i))
@@ -401,7 +372,7 @@ impl<'t, 'g> Prover<'t, 'g> {
                     }
                 }
             }
-            exp_z *= z;
+            exp_z *= *z;
         }
 
         (wL, wR, wO, wV)
@@ -466,7 +437,7 @@ impl<'t, 'g> Prover<'t, 'g> {
 
             // Commit the blinding factors for the input wires
             for v_b in &self.v_blinding {
-                builder = builder.rekey_with_witness_bytes(b"v_blinding", v_b.as_bytes());
+                builder = builder.rekey_with_witness_bytes(b"v_blinding", &v_b.to_bytes_be());
             }
 
             use rand::thread_rng;
@@ -487,37 +458,40 @@ impl<'t, 'g> Prover<'t, 'g> {
         let o_blinding1 = Scalar::random(&mut rng);
         let s_blinding1 = Scalar::random(&mut rng);
 
-        let mut s_L1: Vec<Scalar> = (0..n1).map(|_| Scalar::random(&mut rng)).collect();
-        let mut s_R1: Vec<Scalar> = (0..n1).map(|_| Scalar::random(&mut rng)).collect();
+        let s_L1: Vec<Scalar> = (0..n1).map(|_| Scalar::random(&mut rng)).collect();
+        let s_R1: Vec<Scalar> = (0..n1).map(|_| Scalar::random(&mut rng)).collect();
 
         // A_I = <a_L, G> + <a_R, H> + i_blinding * B_blinding
-        let A_I1 = RistrettoPoint::multiscalar_mul(
+        let A_I1 = StarkPoint::msm_iter(
             iter::once(&i_blinding1)
                 .chain(self.a_L.iter())
-                .chain(self.a_R.iter()),
+                .chain(self.a_R.iter())
+                .copied(),
             iter::once(&self.pc_gens.B_blinding)
                 .chain(gens.G(n1))
-                .chain(gens.H(n1)),
-        )
-        .compress();
+                .chain(gens.H(n1))
+                .copied(),
+        );
 
         // A_O = <a_O, G> + o_blinding * B_blinding
-        let A_O1 = RistrettoPoint::multiscalar_mul(
-            iter::once(&o_blinding1).chain(self.a_O.iter()),
-            iter::once(&self.pc_gens.B_blinding).chain(gens.G(n1)),
-        )
-        .compress();
-
-        // S = <s_L, G> + <s_R, H> + s_blinding * B_blinding
-        let S1 = RistrettoPoint::multiscalar_mul(
-            iter::once(&s_blinding1)
-                .chain(s_L1.iter())
-                .chain(s_R1.iter()),
+        let A_O1 = StarkPoint::msm_iter(
+            iter::once(&o_blinding1).chain(self.a_O.iter()).copied(),
             iter::once(&self.pc_gens.B_blinding)
                 .chain(gens.G(n1))
-                .chain(gens.H(n1)),
-        )
-        .compress();
+                .copied(),
+        );
+
+        // S = <s_L, G> + <s_R, H> + s_blinding * B_blinding
+        let S1 = StarkPoint::msm_iter(
+            iter::once(&s_blinding1)
+                .chain(s_L1.iter())
+                .chain(s_R1.iter())
+                .copied(),
+            iter::once(&self.pc_gens.B_blinding)
+                .chain(gens.G(n1))
+                .chain(gens.H(n1))
+                .copied(),
+        );
 
         self.transcript.append_point(b"A_I1", &A_I1);
         self.transcript.append_point(b"A_O1", &A_O1);
@@ -552,37 +526,42 @@ impl<'t, 'g> Prover<'t, 'g> {
             (Scalar::zero(), Scalar::zero(), Scalar::zero())
         };
 
-        let mut s_L2: Vec<Scalar> = (0..n2).map(|_| Scalar::random(&mut rng)).collect();
-        let mut s_R2: Vec<Scalar> = (0..n2).map(|_| Scalar::random(&mut rng)).collect();
+        let s_L2: Vec<Scalar> = (0..n2).map(|_| Scalar::random(&mut rng)).collect();
+        let s_R2: Vec<Scalar> = (0..n2).map(|_| Scalar::random(&mut rng)).collect();
 
         let (A_I2, A_O2, S2) = if has_2nd_phase_commitments {
             (
                 // A_I = <a_L, G> + <a_R, H> + i_blinding * B_blinding
-                RistrettoPoint::multiscalar_mul(
+                StarkPoint::msm_iter(
                     iter::once(&i_blinding2)
                         .chain(self.a_L.iter().skip(n1))
-                        .chain(self.a_R.iter().skip(n1)),
+                        .chain(self.a_R.iter().skip(n1))
+                        .copied(),
                     iter::once(&self.pc_gens.B_blinding)
                         .chain(gens.G(n).skip(n1))
-                        .chain(gens.H(n).skip(n1)),
-                )
-                .compress(),
+                        .chain(gens.H(n).skip(n1))
+                        .copied(),
+                ),
                 // A_O = <a_O, G> + o_blinding * B_blinding
-                RistrettoPoint::multiscalar_mul(
-                    iter::once(&o_blinding2).chain(self.a_O.iter().skip(n1)),
-                    iter::once(&self.pc_gens.B_blinding).chain(gens.G(n).skip(n1)),
-                )
-                .compress(),
+                StarkPoint::msm_iter(
+                    iter::once(&o_blinding2)
+                        .chain(self.a_O.iter().skip(n1))
+                        .copied(),
+                    iter::once(&self.pc_gens.B_blinding)
+                        .chain(gens.G(n).skip(n1))
+                        .copied(),
+                ),
                 // S = <s_L, G> + <s_R, H> + s_blinding * B_blinding
-                RistrettoPoint::multiscalar_mul(
+                StarkPoint::msm_iter(
                     iter::once(&s_blinding2)
                         .chain(s_L2.iter())
-                        .chain(s_R2.iter()),
+                        .chain(s_R2.iter())
+                        .copied(),
                     iter::once(&self.pc_gens.B_blinding)
                         .chain(gens.G(n).skip(n1))
-                        .chain(gens.H(n).skip(n1)),
-                )
-                .compress(),
+                        .chain(gens.H(n).skip(n1))
+                        .copied(),
+                ),
             )
         } else {
             // Since we are using zero blinding factors and
@@ -590,9 +569,9 @@ impl<'t, 'g> Prover<'t, 'g> {
             // the commitments _must_ be identity points,
             // so we can hardcode them saving 3 mults+compressions.
             (
-                CompressedRistretto::identity(),
-                CompressedRistretto::identity(),
-                CompressedRistretto::identity(),
+                StarkPoint::identity(),
+                StarkPoint::identity(),
+                StarkPoint::identity(),
             )
         };
 
@@ -611,7 +590,7 @@ impl<'t, 'g> Prover<'t, 'g> {
         let mut r_poly = util::VecPoly3::zero(n);
 
         let mut exp_y = Scalar::one(); // y^n starting at n=0
-        let y_inv = y.invert();
+        let y_inv = y.inverse();
         let exp_y_inv = util::exp_iter(y_inv).take(padded_n).collect::<Vec<_>>();
 
         let sLsR = s_L1
@@ -645,11 +624,11 @@ impl<'t, 'g> Prover<'t, 'g> {
         let t_5_blinding = Scalar::random(&mut rng);
         let t_6_blinding = Scalar::random(&mut rng);
 
-        let T_1 = self.pc_gens.commit(t_poly.t1, t_1_blinding).compress();
-        let T_3 = self.pc_gens.commit(t_poly.t3, t_3_blinding).compress();
-        let T_4 = self.pc_gens.commit(t_poly.t4, t_4_blinding).compress();
-        let T_5 = self.pc_gens.commit(t_poly.t5, t_5_blinding).compress();
-        let T_6 = self.pc_gens.commit(t_poly.t6, t_6_blinding).compress();
+        let T_1 = self.pc_gens.commit(t_poly.t1, t_1_blinding);
+        let T_3 = self.pc_gens.commit(t_poly.t3, t_3_blinding);
+        let T_4 = self.pc_gens.commit(t_poly.t4, t_4_blinding);
+        let T_5 = self.pc_gens.commit(t_poly.t5, t_5_blinding);
+        let T_6 = self.pc_gens.commit(t_poly.t6, t_6_blinding);
 
         self.transcript.append_point(b"T_1", &T_1);
         self.transcript.append_point(b"T_3", &T_3);
@@ -727,18 +706,6 @@ impl<'t, 'g> Prover<'t, 'g> {
             l_vec,
             r_vec,
         );
-
-        // We do not yet have a ClearOnDrop wrapper for Vec<Scalar>.
-        // When PR 202 [1] is merged, we can simply wrap s_L and s_R at the point of creation.
-        // [1] https://github.com/dalek-cryptography/curve25519-dalek/pull/202
-        for scalar in s_L1
-            .iter_mut()
-            .chain(s_L2.iter_mut())
-            .chain(s_R1.iter_mut())
-            .chain(s_R2.iter_mut())
-        {
-            scalar.clear();
-        }
 
         Ok(R1CSProof {
             A_I1,

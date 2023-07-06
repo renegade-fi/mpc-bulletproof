@@ -1,9 +1,8 @@
 #![allow(non_snake_case)]
 //! Definition of the proof struct.
 
-use curve25519_dalek::ristretto::CompressedRistretto;
-use curve25519_dalek::scalar::Scalar;
-use curve25519_dalek::traits::{Identity, IsIdentity};
+use mpc_stark::algebra::scalar::{Scalar, SCALAR_BYTES};
+use mpc_stark::algebra::stark_curve::{StarkPoint, STARK_POINT_BYTES};
 
 use crate::errors::R1CSError;
 use crate::inner_product_proof::InnerProductProof;
@@ -35,27 +34,27 @@ const TWO_PHASE_COMMITMENTS: u8 = 1;
 #[allow(non_snake_case)]
 pub struct R1CSProof {
     /// Commitment to the values of input wires in the first phase.
-    pub(crate) A_I1: CompressedRistretto,
+    pub(crate) A_I1: StarkPoint,
     /// Commitment to the values of output wires in the first phase.
-    pub(crate) A_O1: CompressedRistretto,
+    pub(crate) A_O1: StarkPoint,
     /// Commitment to the blinding factors in the first phase.
-    pub(crate) S1: CompressedRistretto,
+    pub(crate) S1: StarkPoint,
     /// Commitment to the values of input wires in the second phase.
-    pub(crate) A_I2: CompressedRistretto,
+    pub(crate) A_I2: StarkPoint,
     /// Commitment to the values of output wires in the second phase.
-    pub(crate) A_O2: CompressedRistretto,
+    pub(crate) A_O2: StarkPoint,
     /// Commitment to the blinding factors in the second phase.
-    pub(crate) S2: CompressedRistretto,
+    pub(crate) S2: StarkPoint,
     /// Commitment to the \\(t_1\\) coefficient of \\( t(x) \\)
-    pub(crate) T_1: CompressedRistretto,
+    pub(crate) T_1: StarkPoint,
     /// Commitment to the \\(t_3\\) coefficient of \\( t(x) \\)
-    pub(crate) T_3: CompressedRistretto,
+    pub(crate) T_3: StarkPoint,
     /// Commitment to the \\(t_4\\) coefficient of \\( t(x) \\)
-    pub(crate) T_4: CompressedRistretto,
+    pub(crate) T_4: StarkPoint,
     /// Commitment to the \\(t_5\\) coefficient of \\( t(x) \\)
-    pub(crate) T_5: CompressedRistretto,
+    pub(crate) T_5: StarkPoint,
     /// Commitment to the \\(t_6\\) coefficient of \\( t(x) \\)
-    pub(crate) T_6: CompressedRistretto,
+    pub(crate) T_6: StarkPoint,
     /// Evaluation of the polynomial \\(t(x)\\) at the challenge point \\(x\\)
     pub(crate) t_x: Scalar,
     /// Blinding factor for the synthetic commitment to \\( t(x) \\)
@@ -84,26 +83,26 @@ impl R1CSProof {
         let mut buf = Vec::with_capacity(self.serialized_size());
         if self.missing_phase2_commitments() {
             buf.push(ONE_PHASE_COMMITMENTS);
-            buf.extend_from_slice(self.A_I1.as_bytes());
-            buf.extend_from_slice(self.A_O1.as_bytes());
-            buf.extend_from_slice(self.S1.as_bytes());
+            buf.extend_from_slice(&self.A_I1.to_bytes());
+            buf.extend_from_slice(&self.A_O1.to_bytes());
+            buf.extend_from_slice(&self.S1.to_bytes());
         } else {
             buf.push(TWO_PHASE_COMMITMENTS);
-            buf.extend_from_slice(self.A_I1.as_bytes());
-            buf.extend_from_slice(self.A_O1.as_bytes());
-            buf.extend_from_slice(self.S1.as_bytes());
-            buf.extend_from_slice(self.A_I2.as_bytes());
-            buf.extend_from_slice(self.A_O2.as_bytes());
-            buf.extend_from_slice(self.S2.as_bytes());
+            buf.extend_from_slice(&self.A_I1.to_bytes());
+            buf.extend_from_slice(&self.A_O1.to_bytes());
+            buf.extend_from_slice(&self.S1.to_bytes());
+            buf.extend_from_slice(&self.A_I2.to_bytes());
+            buf.extend_from_slice(&self.A_O2.to_bytes());
+            buf.extend_from_slice(&self.S2.to_bytes());
         }
-        buf.extend_from_slice(self.T_1.as_bytes());
-        buf.extend_from_slice(self.T_3.as_bytes());
-        buf.extend_from_slice(self.T_4.as_bytes());
-        buf.extend_from_slice(self.T_5.as_bytes());
-        buf.extend_from_slice(self.T_6.as_bytes());
-        buf.extend_from_slice(self.t_x.as_bytes());
-        buf.extend_from_slice(self.t_x_blinding.as_bytes());
-        buf.extend_from_slice(self.e_blinding.as_bytes());
+        buf.extend_from_slice(&self.T_1.to_bytes());
+        buf.extend_from_slice(&self.T_3.to_bytes());
+        buf.extend_from_slice(&self.T_4.to_bytes());
+        buf.extend_from_slice(&self.T_5.to_bytes());
+        buf.extend_from_slice(&self.T_6.to_bytes());
+        buf.extend_from_slice(&self.t_x.to_bytes_be());
+        buf.extend_from_slice(&self.t_x_blinding.to_bytes_be());
+        buf.extend_from_slice(&self.e_blinding.to_bytes_be());
         buf.extend(self.ipp_proof.to_bytes_iter());
         buf
     }
@@ -148,38 +147,42 @@ impl R1CSProof {
         }
 
         // This macro takes care of counting bytes in the slice
-        macro_rules! read32 {
+        macro_rules! read_point {
             () => {{
-                let tmp = util::read32(slice);
-                slice = &slice[32..];
-                tmp
+                let tmp = util::read_exact::<STARK_POINT_BYTES>(slice);
+                slice = &slice[STARK_POINT_BYTES..];
+                StarkPoint::from_bytes(&tmp).map_err(|_| R1CSError::FormatError)
             }};
         }
 
-        let A_I1 = CompressedRistretto(read32!());
-        let A_O1 = CompressedRistretto(read32!());
-        let S1 = CompressedRistretto(read32!());
+        macro_rules! read_scalar {
+            () => {{
+                let tmp = util::read_exact::<SCALAR_BYTES>(slice);
+                slice = &slice[SCALAR_BYTES..];
+                Scalar::from_be_bytes_mod_order(&tmp)
+            }};
+        }
+
+        let A_I1 = read_point!()?;
+        let A_O1 = read_point!()?;
+        let S1 = read_point!()?;
         let (A_I2, A_O2, S2) = if version == ONE_PHASE_COMMITMENTS {
             (
-                CompressedRistretto::identity(),
-                CompressedRistretto::identity(),
-                CompressedRistretto::identity(),
+                StarkPoint::identity(),
+                StarkPoint::identity(),
+                StarkPoint::identity(),
             )
         } else {
-            (
-                CompressedRistretto(read32!()),
-                CompressedRistretto(read32!()),
-                CompressedRistretto(read32!()),
-            )
+            (read_point!()?, read_point!()?, read_point!()?)
         };
-        let T_1 = CompressedRistretto(read32!());
-        let T_3 = CompressedRistretto(read32!());
-        let T_4 = CompressedRistretto(read32!());
-        let T_5 = CompressedRistretto(read32!());
-        let T_6 = CompressedRistretto(read32!());
-        let t_x = Scalar::from_canonical_bytes(read32!()).ok_or(R1CSError::FormatError)?;
-        let t_x_blinding = Scalar::from_canonical_bytes(read32!()).ok_or(R1CSError::FormatError)?;
-        let e_blinding = Scalar::from_canonical_bytes(read32!()).ok_or(R1CSError::FormatError)?;
+        let T_1 = read_point!()?;
+        let T_3 = read_point!()?;
+        let T_4 = read_point!()?;
+        let T_5 = read_point!()?;
+        let T_6 = read_point!()?;
+        let t_x = read_scalar!();
+        let t_x_blinding = read_scalar!();
+        let e_blinding = read_scalar!();
 
         // XXX: IPPProof from_bytes gives ProofError.
         let ipp_proof = InnerProductProof::from_bytes(slice).map_err(|_| R1CSError::FormatError)?;

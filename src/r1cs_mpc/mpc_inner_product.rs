@@ -7,18 +7,13 @@
 extern crate alloc;
 
 use alloc::vec::Vec;
-use mpc_ristretto::authenticated_ristretto::{
-    AuthenticatedCompressedRistretto, AuthenticatedRistretto,
-};
-use mpc_ristretto::authenticated_scalar::AuthenticatedScalar;
-use mpc_ristretto::beaver::SharedValueSource;
-use mpc_ristretto::network::MpcNetwork;
+use mpc_stark::algebra::authenticated_scalar::AuthenticatedScalarResult;
+use mpc_stark::algebra::authenticated_stark_point::AuthenticatedStarkPointResult;
+use mpc_stark::fabric::MpcFabric;
 
 use core::iter;
 use curve25519_dalek::scalar::Scalar;
 use merlin::Transcript;
-
-use super::mpc_prover::SharedMpcFabric;
 
 use crate::errors::MultiproverError;
 use crate::inner_product_proof::InnerProductProof;
@@ -29,25 +24,25 @@ use crate::transcript::TranscriptProtocol;
 /// This type does not include a verifier implementation; verification should happen
 /// via the standard Bulletproof verifier defined in the parent module.
 #[derive(Clone, Debug)]
-pub struct SharedInnerProductProof<N: MpcNetwork + Send, S: SharedValueSource<Scalar>> {
-    pub(crate) L_vec: Vec<AuthenticatedRistretto<N, S>>,
-    pub(crate) R_vec: Vec<AuthenticatedRistretto<N, S>>,
+pub struct SharedInnerProductProof {
+    pub(crate) L_vec: Vec<AuthenticatedStarkPointResult>,
+    pub(crate) R_vec: Vec<AuthenticatedStarkPointResult>,
     /// Convenience values used for serialization
-    pub(crate) L_compressed: Vec<AuthenticatedCompressedRistretto<N, S>>,
-    pub(crate) R_compressed: Vec<AuthenticatedCompressedRistretto<N, S>>,
+    pub(crate) L_compressed: Vec<AuthenticatedStarkPointResult>,
+    pub(crate) R_compressed: Vec<AuthenticatedStarkPointResult>,
     /// Only expose `a` and `b` for integration tests, testing malleability
     #[cfg(not(feature = "integration_test"))]
     pub(crate) a: AuthenticatedScalar<N, S>,
     #[cfg(feature = "integration_test")]
-    pub a: AuthenticatedScalar<N, S>,
+    pub a: AuthenticatedScalarResult,
     #[cfg(not(feature = "integration_test"))]
-    pub(crate) b: AuthenticatedScalar<N, S>,
+    pub(crate) b: AuthenticatedScalarResult,
     #[cfg(feature = "integration_test")]
-    pub b: AuthenticatedScalar<N, S>,
+    pub b: AuthenticatedScalarResult,
 }
 
 #[allow(clippy::too_many_arguments)]
-impl<N: MpcNetwork + Send, S: SharedValueSource<Scalar>> SharedInnerProductProof<N, S> {
+impl SharedInnerProductProof {
     /// Create an inner-product proof.
     ///
     /// The proof is created with respect to the bases \\(G\\), \\(H'\\),
@@ -57,15 +52,15 @@ impl<N: MpcNetwork + Send, S: SharedValueSource<Scalar>> SharedInnerProductProof
     /// either 0 or a power of 2.
     pub fn create(
         transcript: &mut Transcript,
-        Q: &AuthenticatedRistretto<N, S>,
+        Q: &AuthenticatedStarkPointResult,
         G_factors: &[Scalar],
         H_factors: &[Scalar],
-        mut G_vec: Vec<AuthenticatedRistretto<N, S>>,
-        mut H_vec: Vec<AuthenticatedRistretto<N, S>>,
-        mut a_vec: Vec<AuthenticatedScalar<N, S>>,
-        mut b_vec: Vec<AuthenticatedScalar<N, S>>,
-        fabric: SharedMpcFabric<N, S>,
-    ) -> Result<SharedInnerProductProof<N, S>, MultiproverError> {
+        mut G_vec: Vec<AuthenticatedStarkPointResult>,
+        mut H_vec: Vec<AuthenticatedStarkPointResult>,
+        mut a_vec: Vec<AuthenticatedScalarResult>,
+        mut b_vec: Vec<AuthenticatedScalarResult>,
+        fabric: MpcFabric,
+    ) -> Result<SharedInnerProductProof, MultiproverError> {
         // Create slices G, H, a, b backed by their respective
         // vectors.  This lets us reslice as we compress the lengths
         // of the vectors in the main loop below.
@@ -107,7 +102,7 @@ impl<N: MpcNetwork + Send, S: SharedValueSource<Scalar>> SharedInnerProductProof
             let c_L = authenticated_inner_product(a_L, b_R, fabric.clone());
             let c_R = authenticated_inner_product(a_R, b_L, fabric.clone());
 
-            let L = AuthenticatedRistretto::multiscalar_mul(
+            let L = AuthenticatedStarkPointResult::multiscalar_mul(
                 a_L.iter()
                     .zip(G_factors[n..2 * n].iter())
                     .map(|(a_L_i, g)| a_L_i * *g)
@@ -120,7 +115,7 @@ impl<N: MpcNetwork + Send, S: SharedValueSource<Scalar>> SharedInnerProductProof
                 G_R.iter().chain(H_L.iter()).chain(iter::once(Q)),
             );
 
-            let R = AuthenticatedRistretto::multiscalar_mul(
+            let R = AuthenticatedStarkPointResult::multiscalar_mul(
                 a_R.iter()
                     .zip(G_factors[0..n].iter())
                     .map(|(a_R_i, g)| a_R_i * *g)
@@ -138,7 +133,7 @@ impl<N: MpcNetwork + Send, S: SharedValueSource<Scalar>> SharedInnerProductProof
             // generate invalid secret shares of the challenge values
             let (L_open, R_open) = {
                 let mut opened_values =
-                    AuthenticatedRistretto::batch_open_and_authenticate(&[L, R])
+                    AuthenticatedStarkPointResult::batch_open_and_authenticate(&[L, R])
                         .map_err(MultiproverError::Mpc)?;
                 (opened_values.remove(0), opened_values.remove(0))
             };
@@ -172,11 +167,11 @@ impl<N: MpcNetwork + Send, S: SharedValueSource<Scalar>> SharedInnerProductProof
                     .map(|value| fabric.as_ref().borrow().allocate_public_scalar(*value))
                     .collect::<Vec<_>>();
 
-                G_L[i] = AuthenticatedRistretto::multiscalar_mul(
+                G_L[i] = AuthenticatedStarkPointResult::multiscalar_mul(
                     authenticated_G_coefficients,
                     [&G_L[i], &G_R[i]],
                 );
-                H_L[i] = AuthenticatedRistretto::multiscalar_mul(
+                H_L[i] = AuthenticatedStarkPointResult::multiscalar_mul(
                     authenticated_H_coefficients,
                     [&H_L[i], &H_R[i]],
                 )
@@ -198,12 +193,12 @@ impl<N: MpcNetwork + Send, S: SharedValueSource<Scalar>> SharedInnerProductProof
             let c_L = authenticated_inner_product(a_L, b_R, fabric.clone());
             let c_R = authenticated_inner_product(a_R, b_L, fabric.clone());
 
-            let L = AuthenticatedRistretto::multiscalar_mul(
+            let L = AuthenticatedStarkPointResult::multiscalar_mul(
                 a_L.iter().chain(b_R.iter()).chain(iter::once(&c_L)),
                 G_R.iter().chain(H_L.iter()).chain(iter::once(Q)),
             );
 
-            let R = AuthenticatedRistretto::multiscalar_mul(
+            let R = AuthenticatedStarkPointResult::multiscalar_mul(
                 a_R.iter().chain(b_L.iter()).chain(iter::once(&c_R)),
                 G_L.iter().chain(H_R.iter()).chain(iter::once(Q)),
             );
@@ -213,7 +208,7 @@ impl<N: MpcNetwork + Send, S: SharedValueSource<Scalar>> SharedInnerProductProof
             // generate invalid secret shares of the challenge values
             let (L_open, R_open) = {
                 let mut opened_values =
-                    AuthenticatedRistretto::batch_open_and_authenticate(&[L, R])
+                    AuthenticatedStarkPointResult::batch_open_and_authenticate(&[L, R])
                         .map_err(MultiproverError::Mpc)?;
                 (opened_values.remove(0), opened_values.remove(0))
             };
@@ -232,11 +227,11 @@ impl<N: MpcNetwork + Send, S: SharedValueSource<Scalar>> SharedInnerProductProof
             let u = transcript.challenge_scalar(b"u");
             let u_inv = u.invert();
 
-            let authenticated_G_factors: &[AuthenticatedScalar<N, S>] = &[u_inv, u]
+            let authenticated_G_factors: &[AuthenticatedScalarResult] = &[u_inv, u]
                 .iter()
                 .map(|value| fabric.as_ref().borrow().allocate_public_scalar(*value))
                 .collect::<Vec<_>>();
-            let authenticated_H_factors: &[AuthenticatedScalar<N, S>] = &[u, u_inv]
+            let authenticated_H_factors: &[AuthenticatedScalarResult] = &[u, u_inv]
                 .iter()
                 .map(|value| fabric.as_ref().borrow().allocate_public_scalar(*value))
                 .collect::<Vec<_>>();
@@ -245,11 +240,11 @@ impl<N: MpcNetwork + Send, S: SharedValueSource<Scalar>> SharedInnerProductProof
                 a_L[i] = &a_L[i] * u + u_inv * &a_R[i];
                 b_L[i] = &b_L[i] * u_inv + u * &b_R[i];
 
-                G_L[i] = AuthenticatedRistretto::multiscalar_mul(
+                G_L[i] = AuthenticatedScalarResult::multiscalar_mul(
                     authenticated_G_factors,
                     [&G_L[i], &G_R[i]],
                 );
-                H_L[i] = AuthenticatedRistretto::multiscalar_mul(
+                H_L[i] = AuthenticatedScalarResult::multiscalar_mul(
                     authenticated_H_factors,
                     [&H_L[i], &H_R[i]],
                 );
@@ -320,9 +315,11 @@ impl<N: MpcNetwork + Send, S: SharedValueSource<Scalar>> SharedInnerProductProof
     pub fn open(&self) -> Result<InnerProductProof, MultiproverError> {
         // Open the scalars (a, b)
         // The Ristretto points are already opened as a result of running the protocol
-        let opened_scalars =
-            AuthenticatedScalar::batch_open_and_authenticate(&[self.a.clone(), self.b.clone()])
-                .map_err(MultiproverError::Mpc)?;
+        let opened_scalars = AuthenticatedScalarResult::batch_open_and_authenticate(&[
+            self.a.clone(),
+            self.b.clone(),
+        ])
+        .map_err(MultiproverError::Mpc)?;
         let (a_open, b_open) = (opened_scalars[0].to_scalar(), opened_scalars[1].to_scalar());
 
         Ok(InnerProductProof {
@@ -361,14 +358,10 @@ pub fn inner_product(a: &[Scalar], b: &[Scalar]) -> Scalar {
 
 /// Computes an inner product between two vectors of authenticated scalars
 pub fn authenticated_inner_product<N, S>(
-    a: &[AuthenticatedScalar<N, S>],
-    b: &[AuthenticatedScalar<N, S>],
-    fabric: SharedMpcFabric<N, S>,
-) -> AuthenticatedScalar<N, S>
-where
-    N: MpcNetwork + Send,
-    S: SharedValueSource<Scalar>,
-{
+    a: &[AuthenticatedScalarResult],
+    b: &[AuthenticatedScalarResult],
+    fabric: MpcFabric,
+) -> AuthenticatedScalarResult {
     let mut out = fabric.as_ref().borrow().allocate_public_u64(0);
     if a.len() != b.len() {
         panic!("inner_product(a,b): lengths of vectors do not match");

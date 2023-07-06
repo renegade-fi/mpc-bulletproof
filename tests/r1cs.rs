@@ -1,17 +1,16 @@
 #![allow(non_snake_case)]
 
-extern crate curve25519_dalek;
 extern crate lazy_static;
 extern crate merlin;
 extern crate mpc_bulletproof;
 extern crate rand;
 
-use curve25519_dalek::ristretto::CompressedRistretto;
-use curve25519_dalek::scalar::Scalar;
 use lazy_static::lazy_static;
 use merlin::Transcript;
 use mpc_bulletproof::r1cs::*;
 use mpc_bulletproof::{BulletproofGens, PedersenGens};
+use mpc_stark::algebra::scalar::Scalar;
+use mpc_stark::algebra::stark_curve::StarkPoint;
 use rand::seq::SliceRandom;
 use rand::thread_rng;
 
@@ -67,45 +66,34 @@ impl ShuffleProof {
     /// Attempt to construct a proof that `output` is a permutation of `input`.
     ///
     /// Returns a tuple `(proof, input_commitments || output_commitments)`.
-    pub fn prove<'a, 'b>(
-        pc_gens: &'b PedersenGens,
-        bp_gens: &'b BulletproofGens,
-        transcript: &'a mut Transcript,
+    pub fn prove(
+        pc_gens: &PedersenGens,
+        bp_gens: &BulletproofGens,
+        transcript: &mut Transcript,
         input: &[Scalar],
         output: &[Scalar],
-    ) -> Result<
-        (
-            ShuffleProof,
-            Vec<CompressedRistretto>,
-            Vec<CompressedRistretto>,
-        ),
-        R1CSError,
-    > {
+    ) -> Result<(ShuffleProof, Vec<StarkPoint>, Vec<StarkPoint>), R1CSError> {
         // Apply a domain separator with the shuffle parameters to the transcript
         // XXX should this be part of the gadget?
+        let mut rng = thread_rng();
         let k = input.len();
         transcript.append_message(b"dom-sep", b"ShuffleProof");
         transcript.append_u64(b"k", k as u64);
 
-        let mut prover = Prover::new(&pc_gens, transcript);
-
-        // Construct blinding factors using an RNG.
-        // Note: a non-example implementation would want to operate on existing commitments.
-        let mut blinding_rng = rand::thread_rng();
-
+        let mut prover = Prover::new(pc_gens, transcript);
         let (input_commitments, input_vars): (Vec<_>, Vec<_>) = input
-            .into_iter()
-            .map(|v| prover.commit(*v, Scalar::random(&mut blinding_rng)))
+            .iter()
+            .map(|v| prover.commit(*v, Scalar::random(&mut rng)))
             .unzip();
 
         let (output_commitments, output_vars): (Vec<_>, Vec<_>) = output
-            .into_iter()
-            .map(|v| prover.commit(*v, Scalar::random(&mut blinding_rng)))
+            .iter()
+            .map(|v| prover.commit(*v, Scalar::random(&mut rng)))
             .unzip();
 
         ShuffleProof::gadget(&mut prover, input_vars, output_vars)?;
 
-        let proof = prover.prove(&bp_gens)?;
+        let proof = prover.prove(bp_gens)?;
 
         Ok((ShuffleProof(proof), input_commitments, output_commitments))
     }
@@ -113,13 +101,13 @@ impl ShuffleProof {
 
 impl ShuffleProof {
     /// Attempt to verify a `ShuffleProof`.
-    pub fn verify<'a, 'b>(
+    pub fn verify(
         &self,
-        pc_gens: &'b PedersenGens,
-        bp_gens: &'b BulletproofGens,
-        transcript: &'a mut Transcript,
-        input_commitments: &Vec<CompressedRistretto>,
-        output_commitments: &Vec<CompressedRistretto>,
+        pc_gens: &PedersenGens,
+        bp_gens: &BulletproofGens,
+        transcript: &mut Transcript,
+        input_commitments: &[StarkPoint],
+        output_commitments: &[StarkPoint],
     ) -> Result<(), R1CSError> {
         // Apply a domain separator with the shuffle parameters to the transcript
         // XXX should this be part of the gadget?
@@ -157,7 +145,7 @@ fn kshuffle_helper(k: usize) {
         let mut rng = rand::thread_rng();
         let (min, max) = (0u64, std::u64::MAX);
         let input: Vec<Scalar> = (0..k)
-            .map(|_| Scalar::from(rng.gen_range(min, max)))
+            .map(|_| Scalar::from(rng.gen_range(min..max)))
             .collect();
         let mut output = input.clone();
         output.shuffle(&mut rand::thread_rng());
@@ -240,6 +228,7 @@ fn example_gadget<CS: ConstraintSystem>(
 }
 
 // Prover's scope
+#[allow(clippy::too_many_arguments)]
 fn example_gadget_proof(
     pc_gens: &PedersenGens,
     bp_gens: &BulletproofGens,
@@ -249,7 +238,8 @@ fn example_gadget_proof(
     b2: u64,
     c1: u64,
     c2: u64,
-) -> Result<(R1CSProof, Vec<CompressedRistretto>), R1CSError> {
+) -> Result<(R1CSProof, Vec<StarkPoint>), R1CSError> {
+    let mut rng = thread_rng();
     let mut transcript = Transcript::new(b"R1CSExampleGadget");
 
     // 1. Create a prover
@@ -258,7 +248,7 @@ fn example_gadget_proof(
     // 2. Commit high-level variables
     let (commitments, vars): (Vec<_>, Vec<_>) = [a1, a2, b1, b2, c1]
         .into_iter()
-        .map(|x| prover.commit(Scalar::from(x), Scalar::random(&mut thread_rng())))
+        .map(|x| prover.commit(Scalar::from(x), Scalar::random(&mut rng)))
         .unzip();
 
     // 3. Build a CS
@@ -284,7 +274,7 @@ fn example_gadget_verify(
     bp_gens: &BulletproofGens,
     c2: u64,
     proof: R1CSProof,
-    commitments: Vec<CompressedRistretto>,
+    commitments: Vec<StarkPoint>,
 ) -> Result<(), R1CSError> {
     let mut transcript = Transcript::new(b"R1CSExampleGadget");
 
@@ -359,6 +349,7 @@ fn example_gadget_constraint_ir_prover(
     c2: u64,
 ) -> CircuitWeights {
     // Common
+    let mut rng = thread_rng();
     let pc_gens = PedersenGens::default();
 
     let mut transcript = Transcript::new(b"R1CSExampleGadget");
@@ -369,7 +360,7 @@ fn example_gadget_constraint_ir_prover(
     // 2. Commit high-level variables
     let (_, vars): (Vec<_>, Vec<_>) = [a1, a2, b1, b2, c1]
         .into_iter()
-        .map(|x| prover.commit(Scalar::from(x), Scalar::random(&mut thread_rng())))
+        .map(|x| prover.commit(Scalar::from(x), Scalar::random(&mut rng)))
         .unzip();
 
     // 3. Build a CS
@@ -397,11 +388,12 @@ fn example_gadget_constraint_ir_verifier(
     c2: u64,
 ) -> CircuitWeights {
     // Common
+    let mut rng = thread_rng();
     let pc_gens = PedersenGens::default();
 
     let mut transcript = Transcript::new(b"R1CSExampleGadget");
 
-    let commitments: Vec<CompressedRistretto>;
+    let commitments: Vec<StarkPoint>;
     {
         // Open new scope so that we can reuse `&mut transcript`,
         // it's fine to drop prover after we generate commitments
@@ -412,7 +404,7 @@ fn example_gadget_constraint_ir_verifier(
         // 2. Commit high-level variables (prover)
         let (prover_commitments, _): (Vec<_>, Vec<_>) = [a1, a2, b1, b2, c1]
             .into_iter()
-            .map(|x| prover.commit(Scalar::from(x), Scalar::random(&mut thread_rng())))
+            .map(|x| prover.commit(Scalar::from(x), Scalar::random(&mut rng)))
             .unzip();
 
         commitments = prover_commitments;
@@ -648,7 +640,7 @@ pub fn range_proof<CS: ConstraintSystem>(
         // Add `-b_i*2^i` to the linear combination
         // in order to form the following constraint by the end of the loop:
         // v = Sum(b_i * 2^i, i = 0..n-1)
-        v = v - b * exp_2;
+        v -= b * exp_2;
 
         exp_2 = exp_2 + exp_2;
     }
@@ -669,11 +661,11 @@ fn range_proof_gadget() {
 
     for n in [2, 10, 32, 63].iter() {
         let (min, max) = (0u64, ((1u128 << n) - 1) as u64);
-        let values: Vec<u64> = (0..m).map(|_| rng.gen_range(min, max)).collect();
+        let values: Vec<u64> = (0..m).map(|_| rng.gen_range(min..max)).collect();
         for v in values {
-            assert!(range_proof_helper(v.into(), *n).is_ok());
+            assert!(range_proof_helper(v, *n).is_ok());
         }
-        assert!(range_proof_helper((max + 1).into(), *n).is_err());
+        assert!(range_proof_helper(max + 1, *n).is_err());
     }
 }
 
@@ -686,11 +678,10 @@ fn range_proof_helper(v_val: u64, n: usize) -> Result<(), R1CSError> {
     let (proof, commitment) = {
         // Prover makes a `ConstraintSystem` instance representing a range proof gadget
         let mut prover_transcript = Transcript::new(b"RangeProofTest");
-        let mut rng = rand::thread_rng();
 
         let mut prover = Prover::new(&pc_gens, &mut prover_transcript);
 
-        let (com, var) = prover.commit(v_val.into(), Scalar::random(&mut rng));
+        let (com, var) = prover.commit(v_val.into(), Scalar::random(&mut thread_rng()));
         assert!(range_proof(&mut prover, var.into(), Some(v_val), n).is_ok());
 
         let proof = prover.prove(&bp_gens)?;
@@ -708,5 +699,5 @@ fn range_proof_helper(v_val: u64, n: usize) -> Result<(), R1CSError> {
     assert!(range_proof(&mut verifier, var.into(), None, n).is_ok());
 
     // Verifier verifies proof
-    Ok(verifier.verify(&proof, &bp_gens)?)
+    verifier.verify(&proof, &bp_gens)
 }
