@@ -3,8 +3,8 @@
 use std::collections::HashSet;
 
 use super::{LinearCombination, R1CSError, Variable};
-use curve25519_dalek::scalar::Scalar;
 use merlin::Transcript;
+use mpc_stark::algebra::scalar::Scalar;
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Debug, Default)]

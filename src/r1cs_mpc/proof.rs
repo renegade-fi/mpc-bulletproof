@@ -3,10 +3,8 @@
 
 use curve25519_dalek::scalar::Scalar;
 use curve25519_dalek::traits::IsIdentity;
-use mpc_ristretto::authenticated_ristretto::AuthenticatedCompressedRistretto;
-use mpc_ristretto::authenticated_scalar::AuthenticatedScalar;
-use mpc_ristretto::beaver::SharedValueSource;
-use mpc_ristretto::network::MpcNetwork;
+use mpc_stark::algebra::authenticated_scalar::AuthenticatedScalarResult;
+use mpc_stark::algebra::authenticated_stark_point::AuthenticatedStarkPointResult;
 
 use crate::errors::MultiproverError;
 use crate::r1cs::R1CSProof;
@@ -34,45 +32,45 @@ const TWO_PHASE_COMMITMENTS: u8 = 1;
 /// proof.
 #[derive(Clone, Debug)]
 #[allow(non_snake_case)]
-pub struct SharedR1CSProof<N: MpcNetwork + Send, S: SharedValueSource<Scalar>> {
+pub struct SharedR1CSProof {
     /// Commitment to the values of input wires in the first phase.
-    pub(super) A_I1: AuthenticatedCompressedRistretto<N, S>,
+    pub(super) A_I1: AuthenticatedStarkPointResult,
     /// Commitment to the values of output wires in the first phase.
-    pub(super) A_O1: AuthenticatedCompressedRistretto<N, S>,
+    pub(super) A_O1: AuthenticatedStarkPointResult,
     /// Commitment to the blinding factors in the first phase.
-    pub(super) S1: AuthenticatedCompressedRistretto<N, S>,
+    pub(super) S1: AuthenticatedStarkPointResult,
     /// Commitment to the values of input wires in the second phase.
-    pub(super) A_I2: AuthenticatedCompressedRistretto<N, S>,
+    pub(super) A_I2: AuthenticatedStarkPointResult,
     /// Commitment to the values of output wires in the second phase.
-    pub(super) A_O2: AuthenticatedCompressedRistretto<N, S>,
+    pub(super) A_O2: AuthenticatedStarkPointResult,
     /// Commitment to the blinding factors in the second phase.
-    pub(super) S2: AuthenticatedCompressedRistretto<N, S>,
+    pub(super) S2: AuthenticatedStarkPointResult,
     /// Commitment to the \\(t_1\\) coefficient of \\( t(x) \\)
-    pub(super) T_1: AuthenticatedCompressedRistretto<N, S>,
+    pub(super) T_1: AuthenticatedStarkPointResult,
     /// Commitment to the \\(t_3\\) coefficient of \\( t(x) \\)
-    pub(super) T_3: AuthenticatedCompressedRistretto<N, S>,
+    pub(super) T_3: AuthenticatedStarkPointResult,
     /// Commitment to the \\(t_4\\) coefficient of \\( t(x) \\)
-    pub(super) T_4: AuthenticatedCompressedRistretto<N, S>,
+    pub(super) T_4: AuthenticatedStarkPointResult,
     /// Commitment to the \\(t_5\\) coefficient of \\( t(x) \\)
-    pub(super) T_5: AuthenticatedCompressedRistretto<N, S>,
+    pub(super) T_5: AuthenticatedStarkPointResult,
     /// Commitment to the \\(t_6\\) coefficient of \\( t(x) \\)
-    pub(super) T_6: AuthenticatedCompressedRistretto<N, S>,
+    pub(super) T_6: AuthenticatedStarkPointResult,
     /// Evaluation of the polynomial \\(t(x)\\) at the challenge point \\(x\\)
-    pub(super) t_x: AuthenticatedScalar<N, S>,
+    pub(super) t_x: AuthenticatedScalarResult,
     /// Blinding factor for the synthetic commitment to \\( t(x) \\)
-    pub(super) t_x_blinding: AuthenticatedScalar<N, S>,
+    pub(super) t_x_blinding: AuthenticatedScalarResult,
     /// Blinding factor for the synthetic commitment to the
     /// inner-product arguments
-    pub(super) e_blinding: AuthenticatedScalar<N, S>,
+    pub(super) e_blinding: AuthenticatedScalarResult,
     /// Proof data for the inner-product argument.
     /// Made public for integration tests to test malleability
     #[cfg(not(feature = "integration_test"))]
     pub(super) ipp_proof: SharedInnerProductProof<N, S>,
     #[cfg(feature = "integration_test")]
-    pub ipp_proof: SharedInnerProductProof<N, S>,
+    pub ipp_proof: SharedInnerProductProof,
 }
 
-impl<N: MpcNetwork + Send, S: SharedValueSource<Scalar>> SharedR1CSProof<N, S> {
+impl SharedR1CSProof {
     /// Serializes the proof into a byte array of 1 version byte + \\((13 or 16) + 2k\\) 32-byte elements,
     /// where \\(k=\lceil \log_2(n) \rceil\\) and \\(n\\) is the number of multiplication gates.
     ///

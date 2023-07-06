@@ -1,10 +1,9 @@
 #![allow(non_snake_case)]
 
-use curve25519_dalek::ristretto::{CompressedRistretto, RistrettoPoint};
-use curve25519_dalek::scalar::Scalar;
-use curve25519_dalek::traits::VartimeMultiscalarMul;
 use itertools::Itertools;
 use merlin::Transcript;
+use mpc_stark::algebra::scalar::Scalar;
+use mpc_stark::algebra::stark_curve::StarkPoint;
 
 use super::{
     CircuitWeights, ConstraintSystem, LinearCombination, R1CSProof, RandomizableConstraintSystem,
@@ -37,7 +36,7 @@ pub struct Verifier<'t, 'g> {
     /// `Missing`), so the `num_vars` isn't kept implicitly in the
     /// variable assignments.
     num_vars: usize,
-    V: Vec<CompressedRistretto>,
+    V: Vec<StarkPoint>,
 
     /// This list holds closures that will be called in the second phase of the protocol,
     /// when non-randomized variables are committed.
@@ -156,7 +155,7 @@ impl<'t, 'g> ConstraintSystem for Verifier<'t, 'g> {
         let commitment = self.pc_gens.commit(value, blinding_factor);
 
         // Forward the commitment to the existing method for ingesting pre-committed values
-        self.commit(commitment.compress())
+        self.commit(commitment)
     }
 
     fn constrain(&mut self, lc: LinearCombination) {
@@ -296,7 +295,7 @@ impl<'t, 'g> Verifier<'t, 'g> {
     ///
     /// Returns a pair of a Pedersen commitment (as a compressed Ristretto point),
     /// and a [`Variable`] corresponding to it, which can be used to form constraints.
-    pub fn commit(&mut self, commitment: CompressedRistretto) -> Variable {
+    pub fn commit(&mut self, commitment: StarkPoint) -> Variable {
         let i = self.V.len();
         self.V.push(commitment);
 
@@ -356,7 +355,7 @@ impl<'t, 'g> Verifier<'t, 'g> {
                     Variable::Zero() => {}
                 }
             }
-            exp_z *= z;
+            exp_z *= *z;
         }
 
         (wL, wR, wO, wV, wc)
@@ -425,7 +424,7 @@ impl<'t, 'g> Verifier<'t, 'g> {
         // We are performing a single-party circuit proof, so party index is 0.
         let gens = bp_gens.share(0);
 
-        // These points are the identity in the 1-phase unrandomized case.
+        // These points are the identity in the 1-phase un-randomized case.
         self.transcript.append_point(b"A_I2", &proof.A_I2);
         self.transcript.append_point(b"A_O2", &proof.A_O2);
         self.transcript.append_point(b"S2", &proof.S2);
@@ -466,7 +465,7 @@ impl<'t, 'g> Verifier<'t, 'g> {
         let a = proof.ipp_proof.a;
         let b = proof.ipp_proof.b;
 
-        let y_inv = y.invert();
+        let y_inv = y.inverse();
         let y_inv_vec = util::exp_iter(y_inv)
             .take(padded_n)
             .collect::<Vec<Scalar>>();
@@ -516,7 +515,7 @@ impl<'t, 'g> Verifier<'t, 'g> {
         let T_scalars = [r * x, rxx * x, rxx * xx, rxx * xxx, rxx * xx * xx];
         let T_points = [proof.T_1, proof.T_3, proof.T_4, proof.T_5, proof.T_6];
 
-        let mega_check = RistrettoPoint::optional_multiscalar_mul(
+        let mega_check = StarkPoint::msm_iter(
             iter::once(x) // A_I1
                 .chain(iter::once(xx)) // A_O1
                 .chain(iter::once(xxx)) // S1
@@ -533,24 +532,21 @@ impl<'t, 'g> Verifier<'t, 'g> {
                 .chain(h_scalars) // H
                 .chain(u_sq.iter().cloned()) // ipp_proof.L_vec
                 .chain(u_inv_sq.iter().cloned()), // ipp_proof.R_vec
-            iter::once(proof.A_I1.decompress())
-                .chain(iter::once(proof.A_O1.decompress()))
-                .chain(iter::once(proof.S1.decompress()))
-                .chain(iter::once(proof.A_I2.decompress()))
-                .chain(iter::once(proof.A_O2.decompress()))
-                .chain(iter::once(proof.S2.decompress()))
-                .chain(self.V.iter().map(|V_i| V_i.decompress()))
-                .chain(T_points.iter().map(|T_i| T_i.decompress()))
-                .chain(iter::once(Some(self.pc_gens.B)))
-                .chain(iter::once(Some(self.pc_gens.B_blinding)))
-                .chain(gens.G(padded_n).map(|&G_i| Some(G_i)))
-                .chain(gens.H(padded_n).map(|&H_i| Some(H_i)))
-                .chain(proof.ipp_proof.L_vec.iter().map(|L_i| L_i.decompress()))
-                .chain(proof.ipp_proof.R_vec.iter().map(|R_i| R_i.decompress())),
-        )
-        .ok_or(R1CSError::VerificationError)?;
-
-        use curve25519_dalek::traits::IsIdentity;
+            iter::once(proof.A_I1)
+                .chain(iter::once(proof.A_O1))
+                .chain(iter::once(proof.S1))
+                .chain(iter::once(proof.A_I2))
+                .chain(iter::once(proof.A_O2))
+                .chain(iter::once(proof.S2))
+                .chain(self.V.into_iter())
+                .chain(T_points.into_iter())
+                .chain(iter::once(self.pc_gens.B))
+                .chain(iter::once(self.pc_gens.B_blinding))
+                .chain(gens.G(padded_n).copied())
+                .chain(gens.H(padded_n).copied())
+                .chain(proof.ipp_proof.L_vec.iter().copied())
+                .chain(proof.ipp_proof.R_vec.iter().copied()),
+        );
 
         if !mega_check.is_identity() {
             return Err(R1CSError::VerificationError);

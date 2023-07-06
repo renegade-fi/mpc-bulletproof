@@ -13,25 +13,28 @@ readme = "README.md"
 license = "MIT"
 repository = "https://github.com/renegade-fi/mpc-bulletproof"
 categories = ["cryptography"]
-keywords = ["cryptography", "crypto", "ristretto", "zero-knowledge", "bulletproofs"]
+keywords = ["cryptography", "crypto", "stark", "zero-knowledge", "bulletproofs"]
 description = "A pure-Rust implementation of collaboratively proved Bulletproofs using Ristretto"
 edition = "2021"
 
 [dependencies]
+ark-ec = "0.4"
+ark-ff = "0.4"
+ark-serialize = "0.4"
 curve25519-dalek = { version = "2", default-features = false, features = ["u64_backend", "nightly", "serde", "alloc"] }
-mpc-ristretto = { git = "https://github.com/renegade-fi/MPC-Ristretto" }
+mpc-stark = { path = "../mpc-stark" } #{ git = "https://github.com/renegade-fi/mpc-stark", branch = "joey/v2" }
 subtle = { version = "2", default-features = false }
 sha3 = { version = "0.8", default-features = false }
 digest = { version = "0.8", default-features = false }
 rand_core = { version = "0.5", default-features = false, features = ["alloc"] }
-rand = { version = "0.7", default-features = false, optional = true }
+rand = { version = "0.8", default-features = false, optional = true }
 byteorder = { version = "1", default-features = false }
 num-bigint = "0.4"
 itertools = "0.10"
 serde = { version = "1", default-features = false, features = ["alloc"] }
 serde_derive = { version = "1", default-features = false }
 thiserror = { version = "1", optional = true }
-merlin = { version = "2", default-features = false }
+merlin = { git = "https://github.com/renegade-fi/merlin" }
 clear_on_drop = { version = "0.2", default-features = false, features = ["nightly"] }
 
 [dev-dependencies]
@@ -57,21 +60,14 @@ multiprover = []
 integration_test = []
 
 [[test]]
-name = "range_proof"
-
-[[test]]
 name = "r1cs"
-required-features = ["multiprover"]
+required_features = ["multiprover"]
 
 [[test]]
 name = "integration"
 path = "integration/main.rs"
 harness = false
 required_features = ["integration_test"]
-
-[[bench]]
-name = "range_proof"
-harness = false
 
 [[bench]]
 name = "generators"
@@ -81,8 +77,3 @@ harness = false
 name = "r1cs"
 harness = false
 required-features = ["multiprover"]
-
-[[bench]]
-name = "linear_proof"
-harness = false
-

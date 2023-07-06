@@ -2,9 +2,7 @@
 
 use curve25519_dalek::scalar::Scalar;
 use merlin::Transcript;
-use mpc_ristretto::{
-    authenticated_scalar::AuthenticatedScalar, beaver::SharedValueSource, network::MpcNetwork,
-};
+use mpc_stark::algebra::authenticated_scalar::AuthenticatedScalarResult;
 
 use crate::errors::R1CSError;
 
@@ -25,7 +23,7 @@ use super::{
 /// verifier, gadgets for the constraint system should be written
 /// using the `ConstraintSystem` trait, so that the prover and
 /// verifier share the logic for specifying constraints.
-pub trait MpcConstraintSystem<'a, N: 'a + MpcNetwork + Send, S: 'a + SharedValueSource<Scalar>> {
+pub trait MpcConstraintSystem<'a> {
     /// Leases the proof transcript to the user, so they can
     /// add extra data to which the proof must be bound, but which
     /// is not available before creation of the constraint system.
@@ -48,9 +46,9 @@ pub trait MpcConstraintSystem<'a, N: 'a + MpcNetwork + Send, S: 'a + SharedValue
     #[allow(clippy::type_complexity)]
     fn multiply(
         &mut self,
-        left: &MpcLinearCombination<N, S>,
-        right: &MpcLinearCombination<N, S>,
-    ) -> Result<(MpcVariable<N, S>, MpcVariable<N, S>, MpcVariable<N, S>), MultiproverError>;
+        left: &MpcLinearCombination,
+        right: &MpcLinearCombination,
+    ) -> Result<(MpcVariable, MpcVariable, MpcVariable), MultiproverError>;
 
     /// Allocate a single variable.
     ///
@@ -64,8 +62,8 @@ pub trait MpcConstraintSystem<'a, N: 'a + MpcNetwork + Send, S: 'a + SharedValue
     /// Returns unconstrained `Variable` for use in further constraints.
     fn allocate(
         &mut self,
-        assignment: Option<AuthenticatedScalar<N, S>>,
-    ) -> Result<MpcVariable<N, S>, R1CSError>;
+        assignment: Option<AuthenticatedScalarResult>,
+    ) -> Result<MpcVariable, R1CSError>;
 
     /// Allocate variables `left`, `right`, and `out`
     /// with the implicit constraint that
@@ -77,8 +75,8 @@ pub trait MpcConstraintSystem<'a, N: 'a + MpcNetwork + Send, S: 'a + SharedValue
     #[allow(clippy::type_complexity)]
     fn allocate_multiplier(
         &mut self,
-        input_assignments: Option<(AuthenticatedScalar<N, S>, AuthenticatedScalar<N, S>)>,
-    ) -> Result<(MpcVariable<N, S>, MpcVariable<N, S>, MpcVariable<N, S>), R1CSError>;
+        input_assignments: Option<(AuthenticatedScalarResult, AuthenticatedScalarResult)>,
+    ) -> Result<(MpcVariable, MpcVariable, MpcVariable), R1CSError>;
 
     /// Counts the amount of allocated multipliers.
     fn multipliers_len(&self) -> usize;
@@ -87,13 +85,13 @@ pub trait MpcConstraintSystem<'a, N: 'a + MpcNetwork + Send, S: 'a + SharedValue
     /// ```text
     /// lc = 0
     /// ```
-    fn constrain(&mut self, lc: MpcLinearCombination<N, S>);
+    fn constrain(&mut self, lc: MpcLinearCombination);
 
     /// Evaluate a linear combination using the values allocated in the constraint system
     fn eval(
         &self,
-        lc: &MpcLinearCombination<N, S>,
-    ) -> Result<AuthenticatedScalar<N, S>, MultiproverError>;
+        lc: &MpcLinearCombination,
+    ) -> Result<AuthenticatedScalarResult, MultiproverError>;
 }
 
 /// An extension to the constraint system trait that permits randomized constraints.
@@ -101,14 +99,9 @@ pub trait MpcConstraintSystem<'a, N: 'a + MpcNetwork + Send, S: 'a + SharedValue
 /// while gadgets that need randomization should use trait bound `CS: RandomizedConstraintSystem`.
 /// Gadgets generally _should not_ use this trait as a bound on the CS argument: it should be used
 /// by the higher-order protocol that composes gadgets together.
-pub trait MpcRandomizableConstraintSystem<
-    'a,
-    N: 'a + MpcNetwork + Send,
-    S: 'a + SharedValueSource<Scalar>,
->: MpcConstraintSystem<'a, N, S>
-{
+pub trait MpcRandomizableConstraintSystem<'a>: MpcConstraintSystem<'a> {
     /// Represents a concrete type for the CS in a randomization phase.
-    type RandomizedCS: MpcRandomizedConstraintSystem<'a, N, S>;
+    type RandomizedCS: MpcRandomizedConstraintSystem<'a>;
 
     /// Specify additional variables and constraints randomized using a challenge scalar
     /// bound to the assignments of the non-randomized variables.
@@ -139,12 +132,7 @@ pub trait MpcRandomizableConstraintSystem<
 ///
 /// Note: this trait also includes `ConstraintSystem` trait
 /// in order to allow composition of gadgets: e.g. a shuffle gadget can be used in both phases.
-pub trait MpcRandomizedConstraintSystem<
-    'a,
-    N: 'a + MpcNetwork + Send,
-    S: 'a + SharedValueSource<Scalar>,
->: MpcConstraintSystem<'a, N, S>
-{
+pub trait MpcRandomizedConstraintSystem<'a>: MpcConstraintSystem<'a> {
     /// Generates a challenge scalar.
     ///
     /// ### Usage

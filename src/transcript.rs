@@ -1,8 +1,9 @@
 //! Defines a `TranscriptProtocol` trait for using a Merlin transcript.
 
-use curve25519_dalek::ristretto::CompressedRistretto;
-use curve25519_dalek::scalar::Scalar;
+use ark_ff::{PrimeField, Zero};
+use ark_serialize::CanonicalSerialize;
 use merlin::Transcript;
+use mpc_stark::algebra::{scalar::Scalar, stark_curve::StarkPoint};
 
 use crate::errors::ProofError;
 
@@ -26,14 +27,14 @@ pub trait TranscriptProtocol {
     fn append_scalar(&mut self, label: &'static [u8], scalar: &Scalar);
 
     /// Append a `point` with the given `label`.
-    fn append_point(&mut self, label: &'static [u8], point: &CompressedRistretto);
+    fn append_point(&mut self, label: &'static [u8], point: &StarkPoint);
 
     /// Check that a point is not the identity, then append it to the
     /// transcript.  Otherwise, return an error.
     fn validate_and_append_point(
         &mut self,
         label: &'static [u8],
-        point: &CompressedRistretto,
+        point: &StarkPoint,
     ) -> Result<(), ProofError>;
 
     /// Compute a `label`ed challenge variable.
@@ -65,24 +66,25 @@ impl TranscriptProtocol for Transcript {
     }
 
     fn append_scalar(&mut self, label: &'static [u8], scalar: &Scalar) {
-        self.append_message(label, scalar.as_bytes());
+        let buf = scalar.to_bytes_be();
+        self.append_message(label, &buf);
     }
 
-    fn append_point(&mut self, label: &'static [u8], point: &CompressedRistretto) {
-        self.append_message(label, point.as_bytes());
+    fn append_point(&mut self, label: &'static [u8], point: &StarkPoint) {
+        let buf = point.to_bytes();
+        self.append_message(label, &buf);
     }
 
     fn validate_and_append_point(
         &mut self,
         label: &'static [u8],
-        point: &CompressedRistretto,
+        point: &StarkPoint,
     ) -> Result<(), ProofError> {
-        use curve25519_dalek::traits::IsIdentity;
-
-        if point.is_identity() {
+        if point == &StarkPoint::identity() {
             Err(ProofError::VerificationError)
         } else {
-            self.append_message(label, point.as_bytes());
+            let buf = point.to_bytes();
+            self.append_message(label, &buf);
             Ok(())
         }
     }
@@ -91,6 +93,6 @@ impl TranscriptProtocol for Transcript {
         let mut buf = [0u8; 64];
         self.challenge_bytes(label, &mut buf);
 
-        Scalar::from_bytes_mod_order_wide(&buf)
+        Scalar::from_be_bytes_mod_order(&buf)
     }
 }
