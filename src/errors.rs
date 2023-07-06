@@ -3,7 +3,7 @@
 extern crate alloc;
 use alloc::vec::Vec;
 
-use mpc_ristretto::error::MpcError;
+use mpc_stark::error::MpcError;
 #[cfg(feature = "std")]
 use thiserror::Error;
 

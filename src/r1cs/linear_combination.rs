@@ -1,10 +1,11 @@
 //! Definition of linear combinations.
 
 use core::ops::{AddAssign, MulAssign, SubAssign};
-use curve25519_dalek::scalar::Scalar;
 use std::collections::HashMap;
 use std::iter::FromIterator;
 use std::ops::{Add, Mul, Neg, Sub};
+
+use mpc_stark::algebra::scalar::Scalar;
 
 use super::constraint_system::SparseWeightRow;
 
@@ -295,8 +296,8 @@ impl<S: Into<Scalar>> Mul<S> for LinearCombination {
 
 #[cfg(test)]
 mod tests {
-    use curve25519_dalek::scalar::Scalar;
     use merlin::Transcript;
+    use mpc_stark::algebra::scalar::Scalar;
 
     use crate::{
         r1cs::{ConstraintSystem, Prover},
