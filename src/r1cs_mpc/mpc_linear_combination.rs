@@ -1,11 +1,9 @@
 //! Definition of linear combinations.
 
-use core::cell::Ref;
 use core::fmt::{Debug, Formatter, Result};
 use core::hash::Hash;
 use core::ops::{AddAssign, SubAssign};
-use curve25519_dalek::scalar::Scalar;
-use mpc_stark::algebra::authenticated_scalar::AuthenticatedScalarResult;
+use mpc_stark::algebra::scalar::{Scalar, ScalarResult};
 use mpc_stark::fabric::MpcFabric;
 use std::collections::HashMap;
 use std::iter::FromIterator;
@@ -15,7 +13,7 @@ use crate::r1cs::Variable;
 
 /// Represents a variable in a constraint system.
 pub struct MpcVariable {
-    /// The type of variable this repsents in the CS
+    /// The type of variable this represents in the CS
     var_type: Variable,
     /// The underlying MPC fabric, for allocating
     fabric: MpcFabric,
@@ -63,11 +61,6 @@ impl MpcVariable {
         Self { var_type, fabric }
     }
 
-    /// Borrow a reference to the underlying MPC fabric
-    fn borrow_fabric(&self) -> Ref<MpcFabric> {
-        self.fabric.as_ref().borrow()
-    }
-
     /// Create an MpcVariable representing 1
     pub fn one(fabric: MpcFabric) -> Self {
         MpcVariable {
@@ -79,7 +72,7 @@ impl MpcVariable {
 
 impl From<MpcVariable> for MpcLinearCombination {
     fn from(v: MpcVariable) -> MpcLinearCombination {
-        let coeff = v.borrow_fabric().allocate_public_u64(1);
+        let coeff = v.fabric.one();
         MpcLinearCombination {
             terms: HashMap::from([(v, coeff)]),
         }
@@ -88,9 +81,27 @@ impl From<MpcVariable> for MpcLinearCombination {
 
 impl<'a> From<&'a MpcVariable> for MpcLinearCombination {
     fn from(v: &'a MpcVariable) -> Self {
-        let coeff = v.borrow_fabric().allocate_public_u64(1);
+        let coeff = v.fabric.one();
         MpcLinearCombination {
             terms: HashMap::from([(v.clone(), coeff)]),
+        }
+    }
+}
+
+impl From<ScalarResult> for MpcLinearCombination {
+    fn from(s: ScalarResult) -> Self {
+        let fabric = s.clone_fabric();
+        MpcLinearCombination {
+            terms: HashMap::from([(MpcVariable::one(fabric), s)]),
+        }
+    }
+}
+
+impl From<&ScalarResult> for MpcLinearCombination {
+    fn from(s: &ScalarResult) -> Self {
+        let fabric = s.clone_fabric();
+        MpcLinearCombination {
+            terms: HashMap::from([(MpcVariable::one(fabric), s.clone())]),
         }
     }
 }
@@ -140,7 +151,7 @@ impl<S: Into<Scalar>> Mul<S> for MpcVariable {
     type Output = MpcLinearCombination;
 
     fn mul(self, other: S) -> Self::Output {
-        let coeff = self.borrow_fabric().allocate_public_scalar(other.into());
+        let coeff = self.fabric.allocate_scalar(other);
         MpcLinearCombination {
             terms: HashMap::from([(self, coeff)]),
         }
@@ -162,24 +173,6 @@ impl Add<MpcVariable> for Scalar {
     fn add(self, other: MpcVariable) -> Self::Output {
         let self_lc: MpcLinearCombination =
             MpcLinearCombination::from_scalar(self, other.fabric.clone());
-        let other_lc: MpcLinearCombination = other.into();
-        self_lc + other_lc
-    }
-}
-
-impl<'a> Add<&'a MpcVariable> for AuthenticatedScalarResult {
-    type Output = MpcLinearCombination;
-
-    fn add(self, other: &'a MpcVariable) -> Self::Output {
-        self + other.clone()
-    }
-}
-
-impl Add<MpcVariable> for AuthenticatedScalarResult {
-    type Output = MpcLinearCombination;
-
-    fn add(self, other: MpcVariable) -> Self::Output {
-        let self_lc = MpcLinearCombination::from_authenticated_scalar(self, other.fabric.clone());
         let other_lc: MpcLinearCombination = other.into();
         self_lc + other_lc
     }
@@ -218,25 +211,6 @@ impl Sub<MpcVariable> for Scalar {
     }
 }
 
-impl<'a> Sub<&'a MpcVariable> for AuthenticatedScalarResult {
-    type Output = MpcLinearCombination;
-
-    fn sub(self, other: &'a MpcVariable) -> Self::Output {
-        self - other.clone()
-    }
-}
-
-#[allow(clippy::suspicious_arithmetic_impl)]
-impl Sub<MpcVariable> for AuthenticatedScalarResult {
-    type Output = MpcLinearCombination;
-
-    fn sub(self, other: MpcVariable) -> Self::Output {
-        let self_lc = MpcLinearCombination::from_authenticated_scalar(self, other.fabric.clone());
-        let other_lc: MpcLinearCombination = other.into();
-        self_lc + other_lc.neg()
-    }
-}
-
 impl<'a> Mul<&'a MpcVariable> for Scalar {
     type Output = MpcLinearCombination;
 
@@ -249,27 +223,9 @@ impl Mul<MpcVariable> for Scalar {
     type Output = MpcLinearCombination;
 
     fn mul(self, other: MpcVariable) -> Self::Output {
-        let coeff = other.borrow_fabric().allocate_public_scalar(self);
+        let coeff = other.fabric.allocate_scalar(self);
         MpcLinearCombination {
             terms: HashMap::from([(other, coeff)]),
-        }
-    }
-}
-
-impl<'a> Mul<&'a MpcVariable> for AuthenticatedScalarResult {
-    type Output = MpcLinearCombination;
-
-    fn mul(self, other: &'a MpcVariable) -> Self::Output {
-        self * other.clone()
-    }
-}
-
-impl Mul<MpcVariable> for AuthenticatedScalarResult {
-    type Output = MpcLinearCombination;
-
-    fn mul(self, other: MpcVariable) -> Self::Output {
-        MpcLinearCombination {
-            terms: HashMap::from([(other, self)]),
         }
     }
 }
@@ -277,23 +233,15 @@ impl Mul<MpcVariable> for AuthenticatedScalarResult {
 /// Represents a linear combination of
 /// [`MpcVariables`](::r1cs::MpcVariable).  Each term is represented by a
 /// `(MpcVariable, Scalar)` pair.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Default)]
 pub struct MpcLinearCombination {
-    pub(crate) terms: HashMap<MpcVariable, AuthenticatedScalarResult>,
-}
-
-impl Default for MpcLinearCombination {
-    fn default() -> Self {
-        Self {
-            terms: HashMap::new(),
-        }
-    }
+    pub(crate) terms: HashMap<MpcVariable, ScalarResult>,
 }
 
 impl MpcLinearCombination {
     /// Instead of exposing the underlying HashMap interface, this method allows a
     /// caller to add a single term to the linear combination
-    pub fn add_term(&mut self, var: MpcVariable, coeff: AuthenticatedScalarResult) {
+    pub fn add_term(&mut self, var: MpcVariable, coeff: ScalarResult) {
         if let Some(existing_coeff) = self.terms.get(&var) {
             self.terms.insert(var, existing_coeff + coeff);
         } else {
@@ -315,14 +263,8 @@ impl MpcLinearCombination {
         Self {
             terms: HashMap::from([(
                 MpcVariable::one(fabric.clone()),
-                fabric.as_ref().borrow().allocate_public_scalar(scalar),
+                fabric.allocate_scalar(scalar),
             )]),
-        }
-    }
-
-    pub fn from_authenticated_scalar(scalar: AuthenticatedScalarResult, fabric: MpcFabric) -> Self {
-        Self {
-            terms: HashMap::from([(MpcVariable::one(fabric), scalar)]),
         }
     }
 }
@@ -336,31 +278,10 @@ impl FromIterator<(MpcVariable, Scalar)> for MpcLinearCombination {
             terms: iter
                 .into_iter()
                 .map(|(var, coeff)| {
-                    let coeff = var.borrow_fabric().allocate_public_scalar(coeff);
+                    let coeff = var.fabric.allocate_scalar(coeff);
                     (var, coeff)
                 })
                 .collect(),
-        }
-    }
-}
-
-impl FromIterator<(MpcVariable, AuthenticatedScalarResult)> for MpcLinearCombination {
-    fn from_iter<T: IntoIterator<Item = (MpcVariable, AuthenticatedScalarResult)>>(
-        iter: T,
-    ) -> Self {
-        MpcLinearCombination {
-            terms: iter.into_iter().collect(),
-        }
-    }
-}
-
-impl<'a> FromIterator<&'a (MpcVariable, AuthenticatedScalarResult)> for MpcLinearCombination {
-    fn from_iter<T>(iter: T) -> Self
-    where
-        T: IntoIterator<Item = &'a (MpcVariable, AuthenticatedScalarResult)>,
-    {
-        MpcLinearCombination {
-            terms: iter.into_iter().cloned().collect(),
         }
     }
 }
@@ -448,27 +369,6 @@ impl<'a> Mul<&'a MpcLinearCombination> for Scalar {
     }
 }
 
-impl Mul<MpcLinearCombination> for AuthenticatedScalarResult {
-    type Output = MpcLinearCombination;
-
-    fn mul(self, other: MpcLinearCombination) -> Self::Output {
-        let out_terms = other
-            .terms
-            .into_iter()
-            .map(|(var, coeff)| (var, coeff * &self))
-            .collect();
-        MpcLinearCombination { terms: out_terms }
-    }
-}
-
-impl<'a> Mul<&'a MpcLinearCombination> for AuthenticatedScalarResult {
-    type Output = MpcLinearCombination;
-
-    fn mul(self, rhs: &'a MpcLinearCombination) -> Self::Output {
-        self * rhs.clone()
-    }
-}
-
 impl Neg for MpcLinearCombination {
     type Output = Self;
 
@@ -496,7 +396,7 @@ impl<S: Into<Scalar>> Mul<S> for MpcLinearCombination {
     fn mul(mut self, other: S) -> Self::Output {
         let other = other.into();
         for (_, s) in self.terms.iter_mut() {
-            *s *= other
+            *s = &*s * other
         }
         self
     }

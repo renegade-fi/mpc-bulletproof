@@ -4,8 +4,10 @@ extern crate alloc;
 
 use alloc::vec;
 use alloc::vec::Vec;
-use clear_on_drop::clear::Clear;
-use mpc_stark::algebra::scalar::Scalar;
+use mpc_stark::{
+    algebra::scalar::{Scalar, ScalarResult},
+    fabric::MpcFabric,
+};
 
 use crate::inner_product_proof::inner_product;
 
@@ -63,6 +65,20 @@ impl Iterator for ScalarExp {
 pub fn exp_iter(x: Scalar) -> ScalarExp {
     let next_exp_x = Scalar::from(1);
     ScalarExp { x, next_exp_x }
+}
+
+/// Return a result that is the exponentiation chain of the result `x` to the power `n`
+pub fn exp_iter_result(x: ScalarResult, n: usize, fabric: &MpcFabric) -> Vec<ScalarResult> {
+    let mut res = Vec::with_capacity(n);
+    res.push(fabric.one());
+
+    let mut curr_exp = x.clone();
+    for _ in 1..n {
+        res.push(curr_exp.clone());
+        curr_exp = &curr_exp * &x;
+    }
+
+    res
 }
 
 pub fn add_vec(a: &[Scalar], b: &[Scalar]) -> Vec<Scalar> {
@@ -172,7 +188,7 @@ impl Poly6 {
 
 /// Raises `x` to the power `n` using binary exponentiation,
 /// with (1 to 2)*lg(n) scalar multiplications.
-/// TODO: a consttime version of this would be awfully similar to a Montgomery ladder.
+/// TODO: a constant time version of this would be awfully similar to a Montgomery ladder.
 pub fn scalar_exp_vartime(x: &Scalar, mut n: u64) -> Scalar {
     let mut result = Scalar::from(1);
     let mut aux = *x; // x, x^2, x^4, x^8, ...
@@ -182,7 +198,7 @@ pub fn scalar_exp_vartime(x: &Scalar, mut n: u64) -> Scalar {
             result *= aux;
         }
         n >>= 1;
-        aux = aux * aux; // FIXME: one unnecessary mult at the last step here!
+        aux = aux * aux; // FIXME: one unnecessary multiplication at the last step here!
     }
     result
 }
@@ -250,15 +266,6 @@ mod tests {
             Scalar::from(5u64),
         ];
         assert_eq!(Scalar::from(40u64), inner_product(&a, &b));
-    }
-
-    /// Raises `x` to the power `n`.
-    fn scalar_exp_vartime_slow(x: &Scalar, n: u64) -> Scalar {
-        let mut result = Scalar::from(1);
-        for _ in 0..n {
-            result *= *x;
-        }
-        result
     }
 
     #[test]

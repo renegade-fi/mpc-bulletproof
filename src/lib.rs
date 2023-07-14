@@ -7,10 +7,7 @@
 
 extern crate alloc;
 
-#[macro_use]
-extern crate serde_derive;
-
-// Publically export utils for testing, but not otherwise
+// Publicly export utils for testing, but not otherwise
 #[cfg(not(feature = "integration_test"))]
 mod util;
 #[allow(missing_docs)]
@@ -30,11 +27,14 @@ mod notes {
 mod errors;
 mod generators;
 mod inner_product_proof;
+#[cfg(feature = "integration_test")]
+pub use inner_product_proof::*;
 // mod range_proof;
 mod transcript;
 
 pub use crate::errors::ProofError;
 pub use crate::generators::{BulletproofGens, BulletproofGensShare, PedersenGens};
+pub use transcript::MpcTranscript;
 // pub use crate::range_proof::RangeProof;
 #[doc = include_str!("../docs/aggregation-api.md")]
 pub mod range_proof_mpc {
@@ -47,6 +47,5 @@ pub mod range_proof_mpc {
 #[cfg(feature = "std")]
 #[cfg(feature = "multiprover")]
 pub mod r1cs;
-// #[cfg(feature = "multiprover")]
-// #[allow(missing_docs)]
-// pub mod r1cs_mpc;
+#[cfg(feature = "multiprover")]
+pub mod r1cs_mpc;
