@@ -5,28 +5,25 @@
 mod mpc_inner_product;
 mod mpc_prover;
 
-use std::{borrow::Borrow, cell::RefCell, net::SocketAddr, process::exit, rc::Rc};
+use std::{borrow::Borrow, net::SocketAddr, process::exit};
 
 use clap::Parser;
 use colored::Colorize;
-use curve25519_dalek::scalar::Scalar;
 use dns_lookup::lookup_host;
+use mpc_stark::{
+    algebra::scalar::Scalar, beaver::SharedValueSource, fabric::MpcFabric, network::QuicTwoPartyNet,
+};
 use tokio::runtime::{Builder as RuntimeBuilder, Handle};
 
-use mpc_ristretto::beaver::SharedValueSource;
-use mpc_ristretto::fabric::AuthenticatedMpcFabric;
-use mpc_ristretto::network::{MpcNetwork, QuicTwoPartyNet};
-
-#[allow(type_alias_bounds)]
-type SharedMpcFabric<N: MpcNetwork + Send, S: SharedValueSource<Scalar>> =
-    Rc<RefCell<AuthenticatedMpcFabric<N, S>>>;
+/// The amount of time to await the executor shutting down
+const SHUTDOWN_TIMEOUT: u64 = 1000;
 
 /// Integration test arguments, common to all tests
 #[derive(Clone, Debug)]
 #[allow(dead_code)]
 struct IntegrationTestArgs {
     party_id: u64,
-    mpc_fabric: Rc<RefCell<AuthenticatedMpcFabric<QuicTwoPartyNet, PartyIDBeaverSource>>>,
+    mpc_fabric: MpcFabric,
 }
 
 /// Integration test format
@@ -76,7 +73,7 @@ impl PartyIDBeaverSource {
 
 /// The PartyIDBeaverSource returns beaver triplets split statically between the
 /// parties. We assume a = 2, b = 3 ==> c = 6. [a] = (1, 1); [b] = (3, 0) [c] = (2, 4)
-impl SharedValueSource<Scalar> for PartyIDBeaverSource {
+impl SharedValueSource for PartyIDBeaverSource {
     fn next_triplet(&mut self) -> (Scalar, Scalar, Scalar) {
         if self.party_id == 0 {
             (Scalar::from(1u64), Scalar::from(3u64), Scalar::from(2u64))
@@ -94,7 +91,7 @@ impl SharedValueSource<Scalar> for PartyIDBeaverSource {
     }
 
     fn next_shared_inverse_pair(&mut self) -> (Scalar, Scalar) {
-        (Scalar::from(2u64), Scalar::from(2u64).invert())
+        (Scalar::from(2u64), Scalar::from(2u64).inverse())
     }
 }
 
@@ -147,25 +144,20 @@ fn main() {
         Handle::current().block_on(net.connect()).unwrap();
 
         // Share the global mac key (hardcoded to Scalar(15))
-        let net_ref = Rc::new(RefCell::new(net));
-        let beaver_source = Rc::new(RefCell::new(PartyIDBeaverSource::new(args.party)));
+        let beaver_source = PartyIDBeaverSource::new(args.party);
+        let fabric = MpcFabric::new(net, beaver_source);
 
-        let mpc_fabric = Rc::new(RefCell::new(AuthenticatedMpcFabric::new_with_network(
-            args.party,
-            net_ref.clone(),
-            beaver_source,
-        )));
+        // ----------------
+        // | Test Harness |
+        // ----------------
 
-        /**
-         * Test harness
-         */
         if args.party == 0 {
             println!("\n\n{}\n", "Running integration tests...".blue());
         }
 
         let test_args = IntegrationTestArgs {
             party_id: args.party,
-            mpc_fabric,
+            mpc_fabric: fabric.clone(),
         };
 
         let mut all_success = true;
@@ -182,14 +174,12 @@ fn main() {
             all_success &= validate_success(res, args.party);
         }
 
-        // Close the network
+        // Shutdown the fabric and await its termination
         #[allow(clippy::await_holding_refcell_ref, unused_must_use)]
-        if Handle::current()
-            .block_on(net_ref.as_ref().borrow_mut().close())
-            .is_err()
-        {
-            println!("Error tearing down connection");
-        }
+        fabric.shutdown();
+        Handle::current().block_on(tokio::time::sleep(tokio::time::Duration::from_millis(
+            SHUTDOWN_TIMEOUT,
+        )));
 
         all_success
     });

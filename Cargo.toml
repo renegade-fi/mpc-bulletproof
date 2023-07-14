@@ -6,9 +6,11 @@ name = "mpc-bulletproof"
 # - ensure yoloproofs was disabled in an atomic (revertable) commit
 # - update CHANGELOG
 version = "2.0.0"
-authors = ["Cathie Yun <cathieyun@gmail.com>", 
-           "Henry de Valence <hdevalence@hdevalence.ca>",
-           "Oleg Andreev <oleganza@gmail.com>"]
+authors = [
+    "Cathie Yun <cathieyun@gmail.com>",
+    "Henry de Valence <hdevalence@hdevalence.ca>",
+    "Oleg Andreev <oleganza@gmail.com>",
+]
 readme = "README.md"
 license = "MIT"
 repository = "https://github.com/renegade-fi/mpc-bulletproof"
@@ -21,13 +23,8 @@ edition = "2021"
 ark-ec = "0.4"
 ark-ff = "0.4"
 ark-serialize = "0.4"
-curve25519-dalek = { version = "2", default-features = false, features = ["u64_backend", "nightly", "serde", "alloc"] }
-<<<<<<< HEAD
-mpc-ristretto = "0.1"
-=======
 mpc-stark = { path = "../mpc-stark" } #{ git = "https://github.com/renegade-fi/mpc-stark", branch = "joey/v2" }
->>>>>>> 4ea9448 (r1cs: Initial single-prover STARK curve rewrite)
-subtle = { version = "2", default-features = false }
+futures = "0.3"
 sha3 = { version = "0.8", default-features = false }
 digest = { version = "0.8", default-features = false }
 rand_core = { version = "0.5", default-features = false, features = ["alloc"] }
@@ -38,8 +35,11 @@ itertools = "0.10"
 serde = { version = "1", default-features = false, features = ["alloc"] }
 serde_derive = { version = "1", default-features = false }
 thiserror = { version = "1", optional = true }
+tokio = { version = "1.12", features = ["macros", "rt-multi-thread"] }
 merlin = { git = "https://github.com/renegade-fi/merlin" }
-clear_on_drop = { version = "0.2", default-features = false, features = ["nightly"] }
+clear_on_drop = { version = "0.2", default-features = false, features = [
+    "nightly",
+] }
 
 [dev-dependencies]
 async-std = "1.12"
@@ -56,8 +56,7 @@ tokio = { version = "1.12", features = ["macros", "rt-multi-thread"] }
 lazy_static = "1.4"
 
 [features]
-default = ["std", "avx2_backend", "multiprover"]
-avx2_backend = ["curve25519-dalek/avx2_backend"]
+default = ["std", "multiprover"]
 benchmarking = []
 std = ["rand", "rand/std", "thiserror"]
 multiprover = []
@@ -71,7 +70,7 @@ required_features = ["multiprover"]
 name = "integration"
 path = "integration/main.rs"
 harness = false
-required_features = ["integration_test"]
+required_features = ["integration_test", "multiprover"]
 
 [[bench]]
 name = "generators"

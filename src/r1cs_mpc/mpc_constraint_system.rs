@@ -1,10 +1,8 @@
 //! Definition of the constraint system traits for a distributed prover
 
-use curve25519_dalek::scalar::Scalar;
-use merlin::Transcript;
-use mpc_stark::algebra::authenticated_scalar::AuthenticatedScalarResult;
+use mpc_stark::algebra::{authenticated_scalar::AuthenticatedScalarResult, scalar::ScalarResult};
 
-use crate::errors::R1CSError;
+use crate::{errors::R1CSError, transcript::MpcTranscript};
 
 use super::{
     mpc_linear_combination::{MpcLinearCombination, MpcVariable},
@@ -27,7 +25,7 @@ pub trait MpcConstraintSystem<'a> {
     /// Leases the proof transcript to the user, so they can
     /// add extra data to which the proof must be bound, but which
     /// is not available before creation of the constraint system.
-    fn transcript(&mut self) -> &mut Transcript;
+    fn transcript(&mut self) -> &mut MpcTranscript;
 
     /// Allocate and constrain multiplication variables.
     ///
@@ -88,10 +86,7 @@ pub trait MpcConstraintSystem<'a> {
     fn constrain(&mut self, lc: MpcLinearCombination);
 
     /// Evaluate a linear combination using the values allocated in the constraint system
-    fn eval(
-        &self,
-        lc: &MpcLinearCombination,
-    ) -> Result<AuthenticatedScalarResult, MultiproverError>;
+    fn eval(&self, lc: &MpcLinearCombination) -> AuthenticatedScalarResult;
 }
 
 /// An extension to the constraint system trait that permits randomized constraints.
@@ -149,5 +144,5 @@ pub trait MpcRandomizedConstraintSystem<'a>: MpcConstraintSystem<'a> {
     ///     // ...
     /// })
     /// ```
-    fn challenge_scalar(&mut self, label: &'static [u8]) -> Scalar;
+    fn challenge_scalar(&mut self, label: &'static [u8]) -> ScalarResult;
 }

@@ -10,9 +10,10 @@ extern crate alloc;
 use core::panic;
 
 use alloc::vec::Vec;
-use clear_on_drop::clear::Clear;
-use curve25519_dalek::scalar::Scalar;
-use mpc_stark::{algebra::authenticated_scalar::AuthenticatedScalarResult, fabric::MpcFabric};
+use mpc_stark::{
+    algebra::{authenticated_scalar::AuthenticatedScalarResult, scalar::ScalarResult},
+    fabric::MpcFabric,
+};
 
 /// Represents a degree-1 vector polynomial \\(\mathbf{a} + \mathbf{b} \cdot x\\).
 pub struct AuthenticatedVecPoly1(
@@ -57,33 +58,6 @@ pub struct AuthenticatedScalarExp {
     next_exp_x: AuthenticatedScalarResult,
 }
 
-impl Iterator for AuthenticatedScalarExp {
-    type Item = AuthenticatedScalarResult;
-
-    fn next(&mut self) -> Option<AuthenticatedScalarResult> {
-        let exp_x = self.next_exp_x.clone();
-        self.next_exp_x = &self.next_exp_x * &self.x;
-        Some(exp_x)
-    }
-
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        (usize::max_value(), None)
-    }
-}
-
-/// Return an iterator of the powers of `x`.
-pub fn authenticated_exp_iter(
-    x: AuthenticatedScalarResult,
-    fabric: MpcFabric,
-) -> AuthenticatedScalarExp {
-    let next_exp_x = fabric
-        .as_ref()
-        .borrow()
-        .allocate_public_scalar(Scalar::one());
-
-    AuthenticatedScalarExp { x, next_exp_x }
-}
-
 /// Add two vectors of `AuthenticatedScalar`s.
 pub fn add_vec(
     a: &[AuthenticatedScalarResult],
@@ -112,7 +86,7 @@ pub fn authenticated_scalar_inner_product(
     // without access to the fabric. This simplifies the interface.
     let mut out = &a[0] * &b[0];
     for i in 1..a.len() {
-        out += &a[i] * &b[i];
+        out = out + &a[i] * &b[i];
     }
     out
 }
@@ -121,11 +95,7 @@ impl AuthenticatedVecPoly1 {
     /// Constructs the zero polynomial over the field of `AuthenticatedScalar`s represented
     /// as a degree 1 polynomial
     pub fn zero(n: usize, fabric: MpcFabric) -> Self {
-        let fabric_borrow = fabric.as_ref().borrow();
-        AuthenticatedVecPoly1(
-            fabric_borrow.allocate_zeros(n),
-            fabric_borrow.allocate_zeros(n),
-        )
+        AuthenticatedVecPoly1(fabric.zeros_authenticated(n), fabric.zeros_authenticated(n))
     }
 
     /// Returns the inner product of two vectors of degree 1 polynomials
@@ -158,12 +128,11 @@ impl AuthenticatedVecPoly3 {
     /// Returns the zero polynomial over the field of `AuthenticatedScalar`s represented
     /// as a degree 3 polynomial
     pub fn zero(n: usize, fabric: MpcFabric) -> Self {
-        let fabric_borrow = fabric.as_ref().borrow();
         AuthenticatedVecPoly3(
-            fabric_borrow.allocate_zeros(n),
-            fabric_borrow.allocate_zeros(n),
-            fabric_borrow.allocate_zeros(n),
-            fabric_borrow.allocate_zeros(n),
+            fabric.zeros_authenticated(n),
+            fabric.zeros_authenticated(n),
+            fabric.zeros_authenticated(n),
+            fabric.zeros_authenticated(n),
         )
     }
 
@@ -194,8 +163,18 @@ impl AuthenticatedVecPoly3 {
         }
     }
 
-    /// Evaluates the polynomial at `x`
-    pub fn eval(&self, x: &AuthenticatedScalarResult) -> Vec<AuthenticatedScalarResult> {
+    /// Evaluates the polynomial at `x` for a public MPC value
+    pub fn eval(&self, x: &ScalarResult) -> Vec<AuthenticatedScalarResult> {
+        (0..self.0.len())
+            .map(|i| &self.0[i] + x * (&self.1[i] + x * (&self.2[i] + x * &self.3[i])))
+            .collect::<Vec<AuthenticatedScalarResult>>()
+    }
+
+    /// Evaluates the polynomial at `x`, for a share MPC value
+    pub fn eval_authenticated(
+        &self,
+        x: &AuthenticatedScalarResult,
+    ) -> Vec<AuthenticatedScalarResult> {
         (0..self.0.len())
             .map(|i| &self.0[i] + x * (&self.1[i] + x * (&self.2[i] + x * &self.3[i])))
             .collect::<Vec<AuthenticatedScalarResult>>()
@@ -210,72 +189,28 @@ impl AuthenticatedPoly2 {
 }
 
 impl AuthenticatedPoly6 {
-    /// Evaluates the polynomial at `x`
-    pub fn eval(&self, x: &AuthenticatedScalarResult) -> AuthenticatedScalarResult {
+    /// Evaluates the polynomial at `x` which is a public MPC value
+    pub fn eval(&self, x: &ScalarResult) -> AuthenticatedScalarResult {
+        x * (&self.t1
+            + x * (&self.t2 + x * (&self.t3 + x * (&self.t4 + x * (&self.t5 + x * &self.t6)))))
+    }
+
+    /// Evaluates the polynomial at `x` for an `AuthenticatedScalar` `x`
+    pub fn eval_authenticated(&self, x: &AuthenticatedScalarResult) -> AuthenticatedScalarResult {
         x * (&self.t1
             + x * (&self.t2 + x * (&self.t3 + x * (&self.t4 + x * (&self.t5 + x * &self.t6)))))
     }
 }
 
-impl Drop for AuthenticatedVecPoly1 {
-    fn drop(&mut self) {
-        for e in self.0.iter_mut() {
-            (&mut (*e)).clear();
-        }
-        for e in self.1.iter_mut() {
-            (&mut (*e)).clear();
-        }
-    }
-}
-
-impl Drop for AuthenticatedPoly2 {
-    fn drop(&mut self) {
-        (&mut self.0).clear();
-        (&mut self.1).clear();
-        (&mut self.2).clear();
-    }
-}
-
-impl Drop for AuthenticatedVecPoly3 {
-    fn drop(&mut self) {
-        for e in self.0.iter_mut() {
-            (&mut (*e)).clear();
-        }
-        for e in self.1.iter_mut() {
-            (&mut (*e)).clear();
-        }
-        for e in self.2.iter_mut() {
-            (&mut (*e)).clear();
-        }
-        for e in self.3.iter_mut() {
-            (&mut (*e)).clear();
-        }
-    }
-}
-
-impl Drop for AuthenticatedPoly6 {
-    fn drop(&mut self) {
-        (&mut self.t1).clear();
-        (&mut self.t2).clear();
-        (&mut self.t3).clear();
-        (&mut self.t4).clear();
-        (&mut self.t5).clear();
-        (&mut self.t6).clear();
-    }
-}
-
 /// Raises `x` to the power `n` using binary exponentiation,
 /// with (1 to 2)*lg(n) scalar multiplications.
-/// TODO: a consttime version of this would be awfully similar to a Montgomery ladder.
+/// TODO: a constant time version of this would be awfully similar to a Montgomery ladder.
 pub fn authenticated_scalar_exp_vartime(
     x: &AuthenticatedScalarResult,
     mut n: u64,
     fabric: MpcFabric,
 ) -> AuthenticatedScalarResult {
-    let mut result = fabric
-        .as_ref()
-        .borrow()
-        .allocate_public_scalar(Scalar::one());
+    let mut result = fabric.one_authenticated();
     let mut aux = x.clone(); // x, x^2, x^4, x^8, ...
     while n > 0 {
         let bit = n & 1;
@@ -292,45 +227,6 @@ pub fn authenticated_scalar_exp_vartime(
     result
 }
 
-/// Takes the sum of all the powers of `x`, up to `n`
-/// If `n` is a power of 2, it uses the efficient algorithm with `2*lg n` multiplications and additions.
-/// If `n` is not a power of 2, it uses the slow algorithm with `n` multiplications and additions.
-/// In the Bulletproofs case, all calls to `sum_of_powers` should have `n` as a power of 2.
-pub fn authenticated_sum_of_powers(
-    x: &AuthenticatedScalarResult,
-    n: usize,
-    fabric: MpcFabric,
-) -> AuthenticatedScalarResult {
-    if !n.is_power_of_two() {
-        return authenticated_sum_of_powers_slow(x, n, fabric);
-    }
-    if n == 0 || n == 1 {
-        return fabric.as_ref().borrow().allocate_public_u64(n as u64);
-    }
-    let mut m = n;
-    let mut result = Scalar::one() + x;
-    let mut factor = x.clone();
-    while m > 2 {
-        factor = &factor * &factor;
-        result = &result + &factor * &result;
-        m /= 2;
-    }
-    result
-}
-
-// takes the sum of all of the powers of x, up to n
-fn authenticated_sum_of_powers_slow(
-    x: &AuthenticatedScalarResult,
-    n: usize,
-    fabric: MpcFabric,
-) -> AuthenticatedScalarResult {
-    if n == 0 {
-        return fabric.as_ref().borrow().allocate_public_u64(0);
-    }
-
-    authenticated_exp_iter(x.clone(), fabric).take(n).sum()
-}
-
 /// Given `data` with `len >= 32`, return the first 32 bytes.
 pub fn read32(data: &[u8]) -> [u8; 32] {
     let mut buf32 = [0u8; 32];
@@ -340,15 +236,16 @@ pub fn read32(data: &[u8]) -> [u8; 32] {
 
 #[cfg(test)]
 mod tests {
-    use core::cell::RefCell;
-
-    use alloc::rc::Rc;
     use async_trait::async_trait;
-    use mpc_stark::{beaver::SharedValueSource, network::MpcNetwork};
+    use mpc_stark::{
+        algebra::scalar::Scalar,
+        beaver::SharedValueSource,
+        error::MpcNetworkError,
+        network::{MpcNetwork, NetworkOutbound, NetworkPayload, PartyId},
+        PARTY0,
+    };
 
     use crate::inner_product_proof::inner_product;
-
-    use super::*;
 
     /// Mock Beaver source
     #[derive(Debug, Default)]
@@ -389,34 +286,34 @@ mod tests {
 
     #[async_trait]
     impl MpcNetwork for DummyMpcNetwork {
-        /// Always return king
-        fn party_id(&self) -> u64 {
-            0
+        fn party_id(&self) -> PartyId {
+            PARTY0
         }
-    }
 
-    fn create_mock_fabric() -> MpcFabric {
-        MpcFabric::new_with_network(
-            0,
-            Rc::new(RefCell::new(DummyMpcNetwork::new())),
-            Rc::new(RefCell::new(DummySharedScalarSource::new())),
-        )
-    }
+        async fn send_message(&mut self, _message: NetworkOutbound) -> Result<(), MpcNetworkError> {
+            Ok(())
+        }
 
-    #[test]
-    fn exp_2_is_powers_of_2() {
-        let mock_fabric = create_mock_fabric();
-        let exp_2 = authenticated_exp_iter(
-            mock_fabric.as_ref().borrow().allocate_public_u64(2),
-            mock_fabric.clone(),
-        )
-        .take(4)
-        .collect::<Vec<_>>();
+        async fn receive_message(&mut self) -> Result<NetworkOutbound, MpcNetworkError> {
+            Ok(NetworkOutbound {
+                op_id: 0,
+                payload: NetworkPayload::Scalar(Scalar::one()),
+            })
+        }
 
-        assert_eq!(exp_2[0].to_scalar(), Scalar::from(1u64));
-        assert_eq!(exp_2[1].to_scalar(), Scalar::from(2u64));
-        assert_eq!(exp_2[2].to_scalar(), Scalar::from(4u64));
-        assert_eq!(exp_2[3].to_scalar(), Scalar::from(8u64));
+        async fn exchange_messages(
+            &mut self,
+            _message: NetworkOutbound,
+        ) -> Result<NetworkOutbound, MpcNetworkError> {
+            Ok(NetworkOutbound {
+                op_id: 0,
+                payload: NetworkPayload::Scalar(Scalar::one()),
+            })
+        }
+
+        async fn close(&mut self) -> Result<(), MpcNetworkError> {
+            Ok(())
+        }
     }
 
     #[test]
@@ -440,163 +337,8 @@ mod tests {
     fn scalar_exp_vartime_slow(x: &Scalar, n: u64) -> Scalar {
         let mut result = Scalar::one();
         for _ in 0..n {
-            result *= x;
+            result = result * x;
         }
         result
-    }
-
-    #[test]
-    fn test_scalar_exp() {
-        let mock_fabric = create_mock_fabric();
-        let x_scalar = Scalar::from_bits(
-            *b"\x84\xfc\xbcOx\x12\xa0\x06\xd7\x91\xd9z:'\xdd\x1e!CE\xf7\xb1\xb9Vz\x810sD\x96\x85\xb5\x07",
-        );
-        let x = mock_fabric
-            .as_ref()
-            .borrow()
-            .allocate_public_scalar(x_scalar);
-
-        assert_eq!(
-            authenticated_scalar_exp_vartime(&x, 0, mock_fabric.clone()).to_scalar(),
-            Scalar::one()
-        );
-        assert_eq!(
-            authenticated_scalar_exp_vartime(&x, 1, mock_fabric.clone()).to_scalar(),
-            x_scalar
-        );
-        assert_eq!(
-            authenticated_scalar_exp_vartime(&x, 2, mock_fabric.clone()).to_scalar(),
-            x_scalar * x_scalar
-        );
-        assert_eq!(
-            authenticated_scalar_exp_vartime(&x, 3, mock_fabric.clone()).to_scalar(),
-            x_scalar * x_scalar * x_scalar
-        );
-        assert_eq!(
-            authenticated_scalar_exp_vartime(&x, 4, mock_fabric.clone()).to_scalar(),
-            x_scalar * x_scalar * x_scalar * x_scalar
-        );
-        assert_eq!(
-            authenticated_scalar_exp_vartime(&x, 5, mock_fabric.clone()).to_scalar(),
-            x_scalar * x_scalar * x_scalar * x_scalar * x_scalar
-        );
-        assert_eq!(
-            authenticated_scalar_exp_vartime(&x, 64, mock_fabric.clone()).to_scalar(),
-            scalar_exp_vartime_slow(&x_scalar, 64)
-        );
-        assert_eq!(
-            authenticated_scalar_exp_vartime(&x, 0b11001010, mock_fabric).to_scalar(),
-            scalar_exp_vartime_slow(&x_scalar, 0b11001010)
-        );
-    }
-
-    #[test]
-    fn test_authenticated_sum_of_powers() {
-        let mock_fabric = create_mock_fabric();
-        let x = mock_fabric.as_ref().borrow().allocate_public_u64(10u64);
-        assert_eq!(
-            authenticated_sum_of_powers_slow(&x, 0, mock_fabric.clone()),
-            authenticated_sum_of_powers(&x, 0, mock_fabric.clone())
-        );
-        assert_eq!(
-            authenticated_sum_of_powers_slow(&x, 1, mock_fabric.clone()),
-            authenticated_sum_of_powers(&x, 1, mock_fabric.clone())
-        );
-        assert_eq!(
-            authenticated_sum_of_powers_slow(&x, 2, mock_fabric.clone()),
-            authenticated_sum_of_powers(&x, 2, mock_fabric.clone())
-        );
-        assert_eq!(
-            authenticated_sum_of_powers_slow(&x, 4, mock_fabric.clone()),
-            authenticated_sum_of_powers(&x, 4, mock_fabric.clone())
-        );
-        assert_eq!(
-            authenticated_sum_of_powers_slow(&x, 8, mock_fabric.clone()),
-            authenticated_sum_of_powers(&x, 8, mock_fabric.clone())
-        );
-        assert_eq!(
-            authenticated_sum_of_powers_slow(&x, 16, mock_fabric.clone()),
-            authenticated_sum_of_powers(&x, 16, mock_fabric.clone())
-        );
-        assert_eq!(
-            authenticated_sum_of_powers_slow(&x, 32, mock_fabric.clone()),
-            authenticated_sum_of_powers(&x, 32, mock_fabric.clone())
-        );
-        assert_eq!(
-            authenticated_sum_of_powers_slow(&x, 64, mock_fabric.clone()),
-            authenticated_sum_of_powers(&x, 64, mock_fabric)
-        );
-    }
-
-    #[test]
-    fn test_sum_of_powers_slow() {
-        let mock_fabric = create_mock_fabric();
-        let x = mock_fabric.as_ref().borrow().allocate_public_u64(10u64);
-        assert_eq!(
-            authenticated_sum_of_powers_slow(&x, 0, mock_fabric.clone()).to_scalar(),
-            Scalar::zero()
-        );
-        assert_eq!(
-            authenticated_sum_of_powers_slow(&x, 1, mock_fabric.clone()).to_scalar(),
-            Scalar::one()
-        );
-        assert_eq!(
-            authenticated_sum_of_powers_slow(&x, 2, mock_fabric.clone()).to_scalar(),
-            Scalar::from(11u64)
-        );
-        assert_eq!(
-            authenticated_sum_of_powers_slow(&x, 3, mock_fabric.clone()).to_scalar(),
-            Scalar::from(111u64)
-        );
-        assert_eq!(
-            authenticated_sum_of_powers_slow(&x, 4, mock_fabric.clone()).to_scalar(),
-            Scalar::from(1111u64)
-        );
-        assert_eq!(
-            authenticated_sum_of_powers_slow(&x, 5, mock_fabric.clone()).to_scalar(),
-            Scalar::from(11111u64)
-        );
-        assert_eq!(
-            authenticated_sum_of_powers_slow(&x, 6, mock_fabric).to_scalar(),
-            Scalar::from(111111u64)
-        );
-    }
-
-    #[test]
-    fn vec_of_scalars_clear_on_drop() {
-        let mut v = vec![Scalar::from(24u64), Scalar::from(42u64)];
-
-        for e in v.iter_mut() {
-            e.clear();
-        }
-
-        fn flat_slice<T>(x: &[T]) -> &[u8] {
-            use core::mem;
-            use core::slice;
-
-            unsafe { slice::from_raw_parts(x.as_ptr() as *const u8, mem::size_of_val(x)) }
-        }
-
-        assert_eq!(flat_slice(v.as_slice()), &[0u8; 64][..]);
-        assert_eq!(v[0], Scalar::zero());
-        assert_eq!(v[1], Scalar::zero());
-    }
-
-    #[test]
-    fn tuple_of_scalars_clear_on_drop() {
-        let mock_fabric = create_mock_fabric();
-        let mut v = AuthenticatedPoly2(
-            mock_fabric.as_ref().borrow().allocate_public_u64(24u64),
-            mock_fabric.as_ref().borrow().allocate_public_u64(42u64),
-            mock_fabric.as_ref().borrow().allocate_public_u64(255u64),
-        );
-
-        (&mut v.0).clear();
-        (&mut v.1).clear();
-        (&mut v.2).clear();
-
-        assert_eq!(v.0.to_scalar(), Scalar::zero());
-        assert_eq!(v.1.to_scalar(), Scalar::zero());
-        assert_eq!(v.2.to_scalar(), Scalar::zero());
     }
 }
