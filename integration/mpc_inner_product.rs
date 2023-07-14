@@ -2,10 +2,14 @@
 
 use std::iter;
 
+use digest::Digest;
 use futures::future::join_all;
 use itertools::Itertools;
 use merlin::Transcript;
+use mpc_bulletproof::r1cs_mpc::MultiproverError;
 use mpc_bulletproof::{r1cs_mpc::SharedInnerProductProof, util, BulletproofGens, MpcTranscript};
+use mpc_bulletproof::{InnerProductProof, ProofError};
+use mpc_stark::error::MpcError;
 use mpc_stark::{
     algebra::{
         authenticated_scalar::AuthenticatedScalarResult,
@@ -14,9 +18,10 @@ use mpc_stark::{
         stark_curve::StarkPoint,
     },
     fabric::MpcFabric,
-    random_point, PARTY0, PARTY1,
+    PARTY0, PARTY1,
 };
 use rand::{rngs::OsRng, thread_rng, Rng, RngCore};
+use sha3::Sha3_512;
 use tokio::runtime::Handle;
 
 use crate::{IntegrationTest, IntegrationTestArgs};
@@ -27,6 +32,8 @@ use crate::{IntegrationTest, IntegrationTestArgs};
 
 /// The seed of the test transcripts
 pub(crate) const TRANSCRIPT_SEED: &str = "test_inner_product";
+/// The phrase hashed to create a generator for public inputs
+pub(crate) const TEST_PHRASE: &str = "mpc bulletproof integration test";
 
 // ---------
 // | Utils |
@@ -39,6 +46,18 @@ fn generate_challenge_scalar(fabric: MpcFabric) -> ScalarResult {
     let random_scalar = Scalar::random(&mut rng);
 
     fabric.allocate_scalar(random_scalar)
+}
+
+/// Hash the `TEST_PHRASE` into bytes and convert this to a curve point
+///
+/// Note: this is not a secure implementation and should only be used for testing
+fn test_phrase_hash_to_curve() -> StarkPoint {
+    let mut hasher = Sha3_512::new();
+    hasher.input(TEST_PHRASE.as_bytes());
+    let out = hasher.result();
+
+    let scalar_out = Scalar::from_be_bytes_mod_order(&out);
+    scalar_out * StarkPoint::generator()
 }
 
 #[allow(non_snake_case)]
@@ -59,7 +78,7 @@ fn create_input_commitment(
     let H: Vec<StarkPoint> = bp_gens.share(0).H(n).copied().collect_vec();
 
     // Q is the generator used for `c`
-    let Q = random_point();
+    let Q = test_phrase_hash_to_curve();
 
     // Pre-multiply b by iterated powers of y_inv
     let y_inv_powers = util::exp_iter_result(y_inv, b.len(), &fabric);
@@ -75,12 +94,16 @@ fn create_input_commitment(
 fn prove(
     a: &[AuthenticatedScalarResult],
     b: &[AuthenticatedScalarResult],
+    c: &ScalarResult,
     y_inv: ScalarResult,
     fabric: MpcFabric,
-) -> Result<SharedInnerProductProof, String> {
+) -> Result<(SharedInnerProductProof, AuthenticatedStarkPointResult), String> {
     assert_eq!(a.len(), b.len());
     let n = a.len();
     assert!(n.is_power_of_two());
+
+    // Commit to inputs
+    let input_commitment = create_input_commitment(a, b, c, y_inv.clone(), fabric.clone());
 
     // Create the generators for the proof
     let bp_gens = BulletproofGens::new(n, 1);
@@ -95,23 +118,57 @@ fn prove(
     let H_factors: Vec<ScalarResult> = util::exp_iter_result(y_inv, n, &fabric);
 
     // Q is the generator used to commit to the inner product result `c`
-    let Q = fabric.allocate_point(random_point());
+    let Q = fabric.allocate_point(test_phrase_hash_to_curve());
 
     // Generate the inner product proof
     let transcript = Transcript::new(TRANSCRIPT_SEED.as_bytes());
     let mut mpc_transcript = MpcTranscript::new(transcript, fabric.clone());
-    SharedInnerProductProof::create(
-        &mut mpc_transcript,
-        Q,
-        &G_factors,
-        &H_factors,
-        G,
-        H,
-        a.to_vec(),
-        b.to_vec(),
-        &fabric,
+    Ok((
+        SharedInnerProductProof::create(
+            &mut mpc_transcript,
+            Q,
+            &G_factors,
+            &H_factors,
+            G,
+            H,
+            a.to_vec(),
+            b.to_vec(),
+            &fabric,
+        )
+        .map_err(|err| format!("Error proving: {:?}", err))?,
+        input_commitment,
+    ))
+}
+
+/// Verify an inner product proof
+#[allow(non_snake_case)]
+fn verify(
+    n: usize,
+    input_comm: StarkPoint,
+    y_inv: Scalar,
+    proof: InnerProductProof,
+) -> Result<(), ProofError> {
+    // Create the generators for the proof
+    let bp_gens = BulletproofGens::new(n, 1);
+    let G: Vec<StarkPoint> = bp_gens.share(0).G(n).cloned().collect_vec();
+    let H: Vec<StarkPoint> = bp_gens.share(0).H(n).cloned().collect_vec();
+    let Q = test_phrase_hash_to_curve();
+
+    // Create multipliers for the generators
+    let G_factors: Vec<Scalar> = iter::repeat(Scalar::one()).take(n).collect();
+    let H_factors: Vec<Scalar> = util::exp_iter(y_inv).take(n).collect();
+
+    let mut verifier_transcript = Transcript::new(TRANSCRIPT_SEED.as_bytes());
+    proof.verify(
+        n,
+        &mut verifier_transcript,
+        G_factors,
+        H_factors,
+        &input_comm,
+        &Q,
+        &G,
+        &H,
     )
-    .map_err(|err| format!("Error proving: {:?}", err))
 }
 
 #[allow(non_snake_case)]
@@ -122,77 +179,26 @@ fn prove_and_verify(
     y_inv: ScalarResult,
     fabric: MpcFabric,
 ) -> Result<(), String> {
-    assert_eq!(a.len(), b.len());
     let n = a.len();
+    assert_eq!(a.len(), b.len());
     assert!(n.is_power_of_two());
 
-    // Create a commitment to the input
-    let P = create_input_commitment(a, b, c, y_inv.clone(), fabric.clone());
+    // Prove the inner product argument
+    let (proof, input_comm) = prove(a, b, c, y_inv.clone(), fabric)?;
 
-    // Create the generators for the proof
-    let bp_gens = BulletproofGens::new(n, 1);
-    let G: Vec<StarkPoint> = bp_gens.share(0).G(n).cloned().collect_vec();
-    let H: Vec<StarkPoint> = bp_gens.share(0).H(n).cloned().collect_vec();
+    // Await y_inv in the fabric
+    let y_inv = Handle::current().block_on(y_inv);
 
-    // Create multipliers for the generators
-    let G_factors: Vec<ScalarResult> = iter::repeat(Scalar::one())
-        .take(n)
-        .map(|x| fabric.allocate_scalar(x))
-        .collect();
-    let H_factors: Vec<ScalarResult> = util::exp_iter_result(y_inv, n, &fabric);
-
-    // Q is the generator used to commit to the inner product result `c`
-    let Q = fabric.allocate_point(random_point());
-
-    // Generate the inner product proof
-    let transcript = Transcript::new(TRANSCRIPT_SEED.as_bytes());
-    let mut mpc_transcript = MpcTranscript::new(transcript, fabric.clone());
-    let proof = SharedInnerProductProof::create(
-        &mut mpc_transcript,
-        Q.clone(),
-        &G_factors,
-        &H_factors,
-        G.clone(),
-        H.clone(),
-        a.to_vec(),
-        b.to_vec(),
-        &fabric,
-    )
-    .map_err(|err| format!("Error proving: {:?}", err))?;
-
-    println!("\ncreated proof");
-
-    // Open the proof and the input commitment, then verify them
-    let opened_proof = proof
+    // Open the proof and input commitment
+    let proof_opened = proof
         .open()
-        .map_err(|err| format!("Error opening proof: {:?}", err))?;
+        .map_err(|err| format!("error opening proof: {err:?}"))?;
+    let comm_opened = Handle::current()
+        .block_on(input_comm.open_authenticated())
+        .map_err(|err| format!("error opening input comm: {err:?}"))?;
 
-    println!("opened proof");
-
-    let P_open = Handle::current().block_on(P.open());
-    let Q = Handle::current().block_on(Q);
-    let G_factors = Handle::current().block_on(join_all(G_factors.into_iter()));
-    let H_factors = Handle::current().block_on(join_all(H_factors.into_iter()));
-    let mut verifier_transcript = Transcript::new(TRANSCRIPT_SEED.as_bytes());
-    if opened_proof
-        .verify(
-            n,
-            &mut verifier_transcript,
-            G_factors,
-            H_factors,
-            &P_open,
-            &Q,
-            &G,
-            &H,
-        )
-        .is_err()
-    {
-        return Err("proof verification failed...".to_string());
-    }
-
-    println!("verified proof");
-
-    Ok(())
+    verify(n, comm_opened, y_inv, proof_opened)
+        .map_err(|err| format!("error verifying proof: {err:?}"))
 }
 
 // ---------
@@ -202,7 +208,6 @@ fn prove_and_verify(
 /// Tests that a simple inner product argument proves correctly
 fn test_simple_inner_product(test_args: &IntegrationTestArgs) -> Result<(), String> {
     // Party 0 holds the first vector, party 1 holds the second
-    // Expected inner product is 920
     let my_values = if test_args.party_id == 0 {
         vec![13, 42]
     } else {
@@ -223,7 +228,8 @@ fn test_simple_inner_product(test_args: &IntegrationTestArgs) -> Result<(), Stri
         .collect_vec();
     let c: ScalarResult = fabric.allocate_scalar(expected_inner_product);
 
-    let y_inv = generate_challenge_scalar(fabric.clone());
+    let challenge = generate_challenge_scalar(fabric.clone());
+    let y_inv = fabric.exchange_value(challenge.clone()) + challenge;
 
     prove_and_verify(
         &shared_a,
@@ -238,11 +244,13 @@ fn test_simple_inner_product(test_args: &IntegrationTestArgs) -> Result<(), Stri
 fn test_interleaved_inner_product(test_args: &IntegrationTestArgs) -> Result<(), String> {
     // Party 0 holds (a1, a2, a3) and party 1 holds (b1, b2, b3)
     // We prove the inner product a1 * a2 + a3 * b1 + b2 * b3
-    let my_values = if test_args.party_id == 0 {
+    let my_values = if test_args.party_id == PARTY0 {
         vec![2u64, 3u64, 4u64, 0u64]
     } else {
         vec![5u64, 6u64, 7u64, 0u64]
     };
+    // 2 * 3 + 4 * 5 + 6 * 7 = 68
+    let expected_inner_product = 68;
 
     // Share the values with the peer
     let fabric = &test_args.mpc_fabric;
@@ -270,9 +278,9 @@ fn test_interleaved_inner_product(test_args: &IntegrationTestArgs) -> Result<(),
         party1_values[3].clone(),
     ];
 
-    // 2 * 3 + 4 * 5 + 6 * 7 = 68
-    let c = fabric.allocate_scalar(68);
-    let y_inv = generate_challenge_scalar(test_args.mpc_fabric.clone());
+    let c = fabric.allocate_scalar(expected_inner_product);
+    let challenge = generate_challenge_scalar(fabric.clone());
+    let y_inv = fabric.exchange_value(challenge.clone()) + challenge;
 
     prove_and_verify(&a, &b, &c, y_inv, test_args.mpc_fabric.clone())
 }
@@ -293,7 +301,7 @@ fn test_random_inner_product(test_args: &IntegrationTestArgs) -> Result<(), Stri
         .map(|_| rng.gen_range(0..2))
         .map(|value| {
             if fabric.party_id() == PARTY0 {
-                fabric.send_value(fabric.allocate_scalar(value))
+                fabric.send_scalar(value)
             } else {
                 fabric.receive_value()
             }
@@ -338,7 +346,8 @@ fn test_random_inner_product(test_args: &IntegrationTestArgs) -> Result<(), Stri
         .fold(fabric.zero_authenticated(), |acc, (ai, bi)| acc + ai * bi)
         .open();
 
-    let y_inv = generate_challenge_scalar(test_args.mpc_fabric.clone());
+    let challenge = generate_challenge_scalar(test_args.mpc_fabric.clone());
+    let y_inv = fabric.exchange_value(challenge.clone()) + challenge;
 
     // Prove and verify the inner product
     prove_and_verify(
@@ -361,33 +370,50 @@ fn test_malleable_proof(test_args: &IntegrationTestArgs) -> Result<(), String> {
     } else {
         vec![5, 0]
     };
+    let expected_res = 65; // 13 * 5 + 42 * 0
 
     // Share the values with the peer
     let shared_a = my_values
         .iter()
         .map(|value| fabric.share_scalar(*value, PARTY0))
         .collect_vec();
-
     let shared_b = my_values
         .iter()
         .map(|value| fabric.share_scalar(*value, PARTY1))
         .collect_vec();
-    let y_inv = generate_challenge_scalar(test_args.mpc_fabric.clone());
+    let c = fabric.allocate_scalar(expected_res);
+
+    let challenge = generate_challenge_scalar(test_args.mpc_fabric.clone());
+    let y_inv = fabric.exchange_value(challenge.clone()) + challenge;
 
     // Create a proof
-    let mut proof = prove(&shared_a, &shared_b, y_inv, test_args.mpc_fabric.clone())?;
+    let (mut proof, _input_comm) = prove(
+        &shared_a,
+        &shared_b,
+        &c,
+        y_inv,
+        test_args.mpc_fabric.clone(),
+    )?;
 
     // Party 0 tries to modify the proof
+    //
+    // Party 1 must perform an op just so that the sequence numbers stay synchronized
+    // so it just adds zero
     if test_args.party_id == 0 {
         proof.a = proof.a + Scalar::from(2u64);
+    } else {
+        proof.a = proof.a + Scalar::from(0u64)
     }
 
-    // Open and ensure that authentication fails
-    proof.open().map_or(Ok(()), |_| {
-        Err("Expected authentication failure, authentication passed...")
-    })?;
-
-    Ok(())
+    // Open and ensure that verification fails
+    proof
+        .open()
+        .err()
+        .map(|err| match err {
+            MultiproverError::Mpc(MpcError::AuthenticationError) => Ok(()),
+            _ => Err(err.to_string()),
+        })
+        .unwrap_or(Err("expected authentication error".to_string()))
 }
 
 // Take inventory

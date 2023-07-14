@@ -1,33 +1,30 @@
 //! Groups definitions for the MPC prover
 
-use core::{
-    cell::{Ref, RefCell},
-    iter,
-};
-use std::net::SocketAddr;
+use core::{borrow::BorrowMut, iter};
 
 use crate::{
     errors::{MultiproverError, R1CSError},
     r1cs::Variable,
-    transcript::TranscriptProtocol,
+    transcript::MpcTranscript,
     util, BulletproofGens, PedersenGens,
 };
-use alloc::rc::Rc;
-use clear_on_drop::clear::Clear;
-use curve25519_dalek::{ristretto::CompressedRistretto, scalar::Scalar, traits::Identity};
-use itertools::Itertools;
+use futures::future::join_all;
 use merlin::Transcript;
 use mpc_stark::{
     algebra::{
         authenticated_scalar::AuthenticatedScalarResult,
-        authenticated_stark_point::AuthenticatedStarkPointResult,
+        authenticated_stark_point::{
+            AuthenticatedStarkPointOpenResult, AuthenticatedStarkPointResult,
+        },
+        scalar::{Scalar, ScalarResult},
+        stark_curve::StarkPoint,
     },
     beaver::SharedValueSource,
     error::MpcError,
     fabric::MpcFabric,
-    network::MpcNetwork,
-    BeaverSource,
+    network::{PartyId, QuicTwoPartyNet},
 };
+use tokio::runtime::Handle;
 
 use super::{
     authenticated_poly::{AuthenticatedPoly6, AuthenticatedVecPoly3},
@@ -36,7 +33,7 @@ use super::{
     },
     mpc_inner_product::SharedInnerProductProof,
     mpc_linear_combination::{MpcLinearCombination, MpcVariable},
-    proof::SharedR1CSProof,
+    PartiallySharedR1CSProof,
 };
 
 /// An implementation of a collaborative Bulletproof prover.
@@ -56,12 +53,12 @@ use super::{
 ///
 /// As well, Bulletproofs allow for constraints to be added "on the fly" during the proving process.
 /// These constraints are called "randomized constraints" as they have access to random Fiat-Shamir
-/// challenges from the protocol transcript that preceeds them. These constraints are encoded in the
+/// challenges from the protocol transcript that precedes them. These constraints are encoded in the
 /// `deferred_constraints` field.
 #[allow(dead_code, non_snake_case)]
 pub struct MpcProver<'a, 't, 'g> {
     /// The protocol transcript, used for constructing Fiat-Shamir challenges
-    transcript: &'t mut Transcript,
+    transcript: MpcTranscript,
     /// Generators used for Pedersen commitments
     pc_gens: &'g PedersenGens,
     /// Teh constraints accumulated so far.
@@ -75,6 +72,8 @@ pub struct MpcProver<'a, 't, 'g> {
     /// High-level witness assignments (value openings to V commitments)
     /// where we use a pedersen commitment `value * G + blinding * H`
     v: Vec<AuthenticatedScalarResult>,
+    /// High-level public variables that are allocated in hte constraint system
+    v_public: Vec<ScalarResult>,
     /// High level witness data (blinding openings to V commitments)
     v_blinding: Vec<AuthenticatedScalarResult>,
     /// Index of a pending multiplier that hasn't been assigned yet
@@ -84,8 +83,8 @@ pub struct MpcProver<'a, 't, 'g> {
     #[allow(clippy::type_complexity)]
     deferred_constraints:
         Vec<Box<dyn Fn(&mut RandomizingMpcProver<'a, 't, 'g>) -> Result<(), R1CSError> + 'a>>,
-    /// The MPC Fabric used to allocate values
-    mpc_fabric: MpcFabric,
+    /// The underlying MPC fabric
+    fabric: MpcFabric,
 }
 
 /// A prover in the randomizing phase.
@@ -98,31 +97,29 @@ pub struct RandomizingMpcProver<'a, 't, 'g> {
 
 impl<'a, 't, 'g> MpcProver<'a, 't, 'g> {
     /// Create a new MpcProver with a custom network
-    pub fn new_with_network<N: MpcNetwork, S: SharedValueSource>(
-        party_id: u64,
-        network: N,
-        beaver_source: BeaverSource<S>,
-        transcript: &'t mut Transcript,
+    pub fn new_with_network<S: 'static + SharedValueSource>(
+        network: QuicTwoPartyNet,
+        beaver_source: S,
+        transcript: Transcript,
         pc_gens: &'g PedersenGens,
     ) -> Self {
+        // Build a fabric and transcript
+        let fabric = MpcFabric::new(network, beaver_source);
+        let mut transcript = MpcTranscript::new(transcript, fabric.clone());
+
         // Record the beginning of the r1cs protocol
         transcript.r1cs_domain_sep();
-
-        let mpc_fabric = Rc::new(RefCell::new(MpcFabric::new_with_network(
-            party_id,
-            network,
-            beaver_source,
-        )));
 
         Self {
             transcript,
             pc_gens,
-            mpc_fabric,
+            fabric,
             constraints: Vec::new(),
             a_L: Vec::new(),
             a_R: Vec::new(),
             a_O: Vec::new(),
             v: Vec::new(),
+            v_public: Vec::new(),
             v_blinding: Vec::new(),
             deferred_constraints: Vec::new(),
             pending_multiplier: None,
@@ -131,21 +128,23 @@ impl<'a, 't, 'g> MpcProver<'a, 't, 'g> {
 
     /// Create a new MpcProver with a given MPC fabric already allocated
     pub fn new_with_fabric(
-        mpc_fabric: MpcFabric,
-        transcript: &'t mut Transcript,
+        fabric: MpcFabric,
+        transcript: Transcript,
         pc_gens: &'g PedersenGens,
     ) -> Self {
+        let mut transcript = MpcTranscript::new(transcript, fabric.clone());
         transcript.r1cs_domain_sep();
 
         Self {
             transcript,
             pc_gens,
-            mpc_fabric,
+            fabric,
             constraints: Vec::new(),
             a_L: Vec::new(),
             a_R: Vec::new(),
             a_O: Vec::new(),
             v: Vec::new(),
+            v_public: Vec::new(),
             v_blinding: Vec::new(),
             deferred_constraints: Vec::new(),
             pending_multiplier: None,
@@ -168,21 +167,16 @@ impl<'a, 't, 'g> MpcProver<'a, 't, 'g> {
         self.a_O.len()
     }
 
-    /// Helper method to borrow the MPC fabric
-    pub fn borrow_fabric(&self) -> Ref<MpcFabric> {
-        self.mpc_fabric.as_ref().borrow()
-    }
-
     /// Get the party ID of the local party in the MPC network
     pub fn party_id(&self) -> u64 {
-        self.borrow_fabric().party_id()
+        self.fabric.party_id()
     }
 }
 
 impl<'a, 't, 'g> MpcConstraintSystem<'a> for MpcProver<'a, 't, 'g> {
     /// Lease the transcript to the caller
-    fn transcript(&mut self) -> &mut merlin::Transcript {
-        self.transcript
+    fn transcript(&mut self) -> &mut MpcTranscript {
+        self.transcript.borrow_mut()
     }
 
     #[allow(unused_variables)]
@@ -191,22 +185,22 @@ impl<'a, 't, 'g> MpcConstraintSystem<'a> for MpcProver<'a, 't, 'g> {
         left: &MpcLinearCombination,
         right: &MpcLinearCombination,
     ) -> Result<(MpcVariable, MpcVariable, MpcVariable), MultiproverError> {
-        let l = self.eval(left)?;
-        let r = self.eval(right)?;
+        let l = self.eval(left);
+        let r = self.eval(right);
         let o = &l * &r;
 
         // Create new variables for the results
         let l_var = MpcVariable::new_with_type(
             Variable::MultiplierLeft(self.a_L.len()),
-            self.mpc_fabric.clone(),
+            self.fabric.clone(),
         );
         let r_var = MpcVariable::new_with_type(
             Variable::MultiplierRight(self.a_R.len()),
-            self.mpc_fabric.clone(),
+            self.fabric.clone(),
         );
         let o_var = MpcVariable::new_with_type(
             Variable::MultiplierOutput(self.a_O.len()),
-            self.mpc_fabric.clone(),
+            self.fabric.clone(),
         );
 
         // Add the value assignments
@@ -216,9 +210,9 @@ impl<'a, 't, 'g> MpcConstraintSystem<'a> for MpcProver<'a, 't, 'g> {
 
         // Constrain the multiplication
         let mut left_constraints = left.clone();
-        left_constraints.add_term(l_var.clone(), -self.borrow_fabric().allocate_public_u64(1));
+        left_constraints.add_term(l_var.clone(), -self.fabric.allocate_scalar(1));
         let mut right_constraints = right.clone();
-        right_constraints.add_term(r_var.clone(), -self.borrow_fabric().allocate_public_u64(1));
+        right_constraints.add_term(r_var.clone(), -self.fabric.allocate_scalar(1));
         self.constrain(left_constraints);
         self.constrain(right_constraints);
 
@@ -239,12 +233,12 @@ impl<'a, 't, 'g> MpcConstraintSystem<'a> for MpcProver<'a, 't, 'g> {
                 let i = self.a_L.len();
                 self.pending_multiplier = Some(i);
                 self.a_L.push(scalar);
-                let allocated_zero = self.borrow_fabric().allocate_public_scalar(Scalar::zero());
+                let allocated_zero = self.fabric.zero_authenticated();
                 self.a_R.push(allocated_zero.clone());
                 self.a_O.push(allocated_zero);
                 Ok(MpcVariable::new_with_type(
                     Variable::MultiplierLeft(i),
-                    self.mpc_fabric.clone(),
+                    self.fabric.clone(),
                 ))
             }
             Some(i) => {
@@ -253,7 +247,7 @@ impl<'a, 't, 'g> MpcConstraintSystem<'a> for MpcProver<'a, 't, 'g> {
                 self.a_O[i] = &self.a_L[i] * &self.a_R[i];
                 Ok(MpcVariable::new_with_type(
                     Variable::MultiplierRight(i),
-                    self.mpc_fabric.clone(),
+                    self.fabric.clone(),
                 ))
             }
         }
@@ -274,15 +268,15 @@ impl<'a, 't, 'g> MpcConstraintSystem<'a> for MpcProver<'a, 't, 'g> {
         Ok((
             MpcVariable::new_with_type(
                 Variable::MultiplierLeft(self.a_L.len() - 1),
-                self.mpc_fabric.clone(),
+                self.fabric.clone(),
             ),
             MpcVariable::new_with_type(
                 Variable::MultiplierRight(self.a_R.len() - 1),
-                self.mpc_fabric.clone(),
+                self.fabric.clone(),
             ),
             MpcVariable::new_with_type(
                 Variable::MultiplierOutput(self.a_O.len() - 1),
-                self.mpc_fabric.clone(),
+                self.fabric.clone(),
             ),
         ))
     }
@@ -296,10 +290,7 @@ impl<'a, 't, 'g> MpcConstraintSystem<'a> for MpcProver<'a, 't, 'g> {
     }
 
     /// Evaluate a linear combination of allocated variables
-    fn eval(
-        &self,
-        lc: &MpcLinearCombination,
-    ) -> Result<AuthenticatedScalarResult, MultiproverError> {
+    fn eval(&self, lc: &MpcLinearCombination) -> AuthenticatedScalarResult {
         self.eval_lc(lc)
     }
 }
@@ -317,7 +308,7 @@ impl<'a, 't, 'g> MpcRandomizableConstraintSystem<'a> for MpcProver<'a, 't, 'g> {
 }
 
 impl<'a, 't, 'g> MpcConstraintSystem<'a> for RandomizingMpcProver<'a, 't, 'g> {
-    fn transcript(&mut self) -> &mut Transcript {
+    fn transcript(&mut self) -> &mut MpcTranscript {
         self.prover.transcript()
     }
 
@@ -351,16 +342,13 @@ impl<'a, 't, 'g> MpcConstraintSystem<'a> for RandomizingMpcProver<'a, 't, 'g> {
         self.prover.constrain(lc)
     }
 
-    fn eval(
-        &self,
-        lc: &MpcLinearCombination,
-    ) -> Result<AuthenticatedScalarResult, MultiproverError> {
+    fn eval(&self, lc: &MpcLinearCombination) -> AuthenticatedScalarResult {
         self.prover.eval(lc)
     }
 }
 
 impl<'a, 't, 'g> MpcRandomizedConstraintSystem<'a> for RandomizingMpcProver<'a, 't, 'g> {
-    fn challenge_scalar(&mut self, label: &'static [u8]) -> Scalar {
+    fn challenge_scalar(&mut self, label: &'static [u8]) -> ScalarResult {
         self.prover.transcript.challenge_scalar(label)
     }
 }
@@ -371,22 +359,36 @@ impl<'a, 't, 'g> MpcProver<'a, 't, 'g> {
     /// The result is a variable allocated both in the MPC network and in the
     /// constraint system; along with its respectively commitment.
     #[allow(clippy::type_complexity)]
-    pub fn commit(
+    pub fn commit<T: Into<Scalar>>(
         &mut self,
-        owning_party: u64,
-        v: Scalar,
+        owning_party: PartyId,
+        v: T,
         v_blinding: Scalar,
-    ) -> Result<(AuthenticatedStarkPointResult, MpcVariable), MpcError> {
-        // Allocate the value in the MPC network
-        let shared_v = self
-            .borrow_fabric()
-            .allocate_private_scalar(owning_party, v)?;
-        let shared_v_blinding = self
-            .borrow_fabric()
-            .allocate_private_scalar(owning_party, v_blinding)?;
+    ) -> Result<(AuthenticatedStarkPointOpenResult, MpcVariable), MpcError> {
+        // Allocate the value in the MPC network and then commit to the shared value
+        let shared_v = self.fabric.share_scalar(v, owning_party);
+        self.commit_preshared(&shared_v, v_blinding)
+    }
 
-        // Commit to the shared values
-        self.commit_preshared(&shared_v, shared_v_blinding.to_scalar())
+    /// Commit to a batch of values
+    ///
+    /// TODO: Optimize this to use a single batched fabric operation
+    pub fn batch_commit<I, T>(
+        &mut self,
+        owning_party: PartyId,
+        v: I,
+        v_blinding: &[Scalar],
+    ) -> Result<(Vec<AuthenticatedStarkPointOpenResult>, Vec<MpcVariable>), MpcError>
+    where
+        I: IntoIterator<Item = T>,
+        T: Into<Scalar>,
+    {
+        Ok(v.into_iter()
+            .zip(v_blinding.iter())
+            .map(|(v, v_blinding)| self.commit(owning_party, v, *v_blinding))
+            .collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .unzip())
     }
 
     /// Commit to a pre-shared value
@@ -398,168 +400,22 @@ impl<'a, 't, 'g> MpcProver<'a, 't, 'g> {
         &mut self,
         v: &AuthenticatedScalarResult,
         v_blinding: Scalar,
-    ) -> Result<(AuthenticatedStarkPointResult, MpcVariable), MpcError> {
+    ) -> Result<(AuthenticatedStarkPointOpenResult, MpcVariable), MpcError> {
         // Commit to the input, open the commitment, and add the commitment to the transcript.
-        let blinder = self.borrow_fabric().allocate_preshared_scalar(v_blinding);
-        let value_commit = self
-            .pc_gens
-            .commit_shared(v, &blinder)
-            .open_and_authenticate()?
-            .compress();
-        self.transcript.append_point(b"V", &value_commit.value());
+        let blinder = self.fabric.allocate_scalar(v_blinding);
+        let value_commit = self.pc_gens.commit_shared(v, &blinder).open_authenticated();
+        self.transcript.append_point(b"V", &value_commit.value);
 
         // Add the value to the constraint system
         let i = self.v.len();
         self.v.push(v.clone());
-        self.v_blinding.push(blinder);
+        self.v_blinding
+            .push(AuthenticatedScalarResult::new_shared(blinder));
 
         Ok((
             value_commit,
-            MpcVariable::new_with_type(Variable::Committed(i), self.mpc_fabric.clone()),
+            MpcVariable::new_with_type(Variable::Committed(i), self.fabric.clone()),
         ))
-    }
-
-    /// Commit a publicly held value
-    ///
-    /// This assumes that all parties involved in the commitment are calling this method with
-    /// the same value
-    pub fn commit_public(&mut self, v: Scalar) -> (AuthenticatedStarkPointResult, MpcVariable) {
-        // Allocate the value in the MPC network
-        let network_v = self.borrow_fabric().allocate_public_scalar(v);
-        let network_v_blinding = self.borrow_fabric().allocate_public_scalar(Scalar::one());
-
-        // Commit and add the commitment to the transcript
-        // No need to open the commitment, it is assumed to be a public value
-        let value_commit = self
-            .pc_gens
-            .commit_shared(&network_v, &network_v_blinding)
-            .compress();
-        self.transcript.append_point(b"V", &value_commit.value());
-
-        // Add the value to the constraint system
-        let i = self.v.len();
-        self.v.push(network_v);
-        self.v_blinding.push(network_v_blinding);
-
-        (
-            value_commit,
-            MpcVariable::new_with_type(Variable::Committed(i), self.mpc_fabric.clone()),
-        )
-    }
-
-    /// From a batch of privately held values, secret share the value and commit to it
-    #[allow(clippy::type_complexity)]
-    pub fn batch_commit(
-        &mut self,
-        owning_party: u64,
-        v: &[Scalar],
-        v_blinding: &[Scalar],
-    ) -> Result<(Vec<AuthenticatedStarkPointResult>, Vec<MpcVariable>), MpcError> {
-        assert_eq!(
-            v.len(),
-            v_blinding.len(),
-            "values and blinders must have equal length"
-        );
-        if v.is_empty() {
-            return Ok((vec![], vec![]));
-        }
-
-        let shared_values = self.borrow_fabric().batch_allocate_private_scalars(
-            owning_party,
-            &v.iter()
-                .chain(v_blinding.iter())
-                .copied()
-                .collect::<Vec<Scalar>>(),
-        )?;
-
-        let shared_v = &shared_values[..v.len()];
-        let shared_v_blinding = &shared_values[v.len()..]
-            .iter()
-            .map(|val| val.to_scalar())
-            .collect_vec();
-
-        // Commit to the shared inputs
-        self.batch_commit_preshared(shared_v, shared_v_blinding)
-    }
-
-    /// Commit to a batch of pre-shared values
-    ///
-    /// Assumes that the parties call this method on secret shares of the respective
-    /// inputs that are being committed to
-    #[allow(clippy::type_complexity)]
-    pub fn batch_commit_preshared(
-        &mut self,
-        v: &[AuthenticatedScalarResult],
-        v_blinding: &[Scalar],
-    ) -> Result<(Vec<AuthenticatedStarkPointResult>, Vec<MpcVariable>), MpcError> {
-        assert_eq!(
-            v.len(),
-            v_blinding.len(),
-            "values and blinders must have equal length"
-        );
-
-        if v.is_empty() {
-            return Ok((vec![], vec![]));
-        }
-
-        // Allocate the blinders as pre-shared values to create valid MACs
-        // It is okay if the values are different from their shared values as
-        // they are random anyways
-        // TODO: Validate this with adversarial assumptions
-        let blinders = {
-            let borrow = self.borrow_fabric();
-            v_blinding
-                .iter()
-                .map(|val| borrow.allocate_preshared_scalar(*val))
-                .collect_vec()
-        };
-
-        // Create commitments and allocate variables
-        let mut commitments: Vec<AuthenticatedStarkPointResult> = Vec::new();
-        let mut variables: Vec<MpcVariable> = Vec::new();
-        for (v, v_blinding) in v.iter().zip(blinders.iter()) {
-            // Build a shared Pedersen commitment to this input
-            commitments.push(self.pc_gens.commit_shared(v, v_blinding));
-
-            // Add the variable and its blinding factor to the constraint system
-            let i = self.v.len();
-            self.v.push(v.clone());
-            self.v_blinding.push(v_blinding.clone());
-
-            // Append the variable pointer to the output
-            variables.push(MpcVariable::new_with_type(
-                Variable::Committed(i),
-                self.mpc_fabric.clone(),
-            ))
-        }
-
-        // Open the commitments so that they can be used in the shared transcript
-        let opened_commitments =
-            AuthenticatedStarkPointResult::batch_open_and_authenticate(&commitments)?;
-
-        Ok((
-            opened_commitments
-                .iter()
-                .map(|commit| {
-                    let compressed_commit = commit.compress();
-                    self.transcript
-                        .append_point(b"V", &compressed_commit.value());
-                    compressed_commit
-                })
-                .collect_vec(),
-            variables,
-        ))
-    }
-
-    /// Commit to a batch of public values
-    ///
-    /// Assumes that all parties call this method with the same value
-    #[allow(clippy::type_complexity)]
-    pub fn batch_commit_public(
-        &mut self,
-        values: &[Scalar],
-    ) -> (Vec<AuthenticatedStarkPointResult>, Vec<MpcVariable>) {
-        values.iter().map(|val| self.commit_public(*val)).unzip()
     }
 
     /// Use a challenge, `z`, to flatten the constraints in the
@@ -576,7 +432,7 @@ impl<'a, 't, 'g> MpcProver<'a, 't, 'g> {
     #[allow(non_snake_case, clippy::type_complexity)]
     fn flattened_constraints(
         &mut self,
-        z: &Scalar,
+        z: &ScalarResult,
     ) -> (
         Vec<AuthenticatedScalarResult>,
         Vec<AuthenticatedScalarResult>,
@@ -586,33 +442,33 @@ impl<'a, 't, 'g> MpcProver<'a, 't, 'g> {
         let n = self.a_L.len();
         let m = self.v.len();
 
-        let mut wL = self.borrow_fabric().allocate_zeros(n);
-        let mut wR = self.borrow_fabric().allocate_zeros(n);
-        let mut wO = self.borrow_fabric().allocate_zeros(n);
-        let mut wV = self.borrow_fabric().allocate_zeros(m);
+        let mut wL = self.fabric.zeros_authenticated(n);
+        let mut wR = self.fabric.zeros_authenticated(n);
+        let mut wO = self.fabric.zeros_authenticated(n);
+        let mut wV = self.fabric.zeros_authenticated(m);
 
-        let mut exp_z = *z;
+        let mut exp_z = z.clone();
         for lc in self.constraints.iter() {
             for (var, coeff) in &lc.terms {
                 match var.get_type() {
                     Variable::MultiplierLeft(i) => {
-                        wL[i] += exp_z * coeff;
+                        wL[i] = &wL[i] + &exp_z * coeff;
                     }
                     Variable::MultiplierRight(i) => {
-                        wR[i] += exp_z * coeff;
+                        wR[i] = &wR[i] + &exp_z * coeff;
                     }
                     Variable::MultiplierOutput(i) => {
-                        wO[i] += exp_z * coeff;
+                        wO[i] = &wO[i] + &exp_z * coeff;
                     }
                     Variable::Committed(i) => {
-                        wV[i] -= exp_z * coeff;
+                        wV[i] = &wV[i] + &exp_z * coeff;
                     }
                     Variable::One() | Variable::Zero() => {
                         // The prover doesn't need to handle constant terms
                     }
                 }
             }
-            exp_z *= z;
+            exp_z = exp_z * z;
         }
 
         (wL, wR, wO, wV)
@@ -642,48 +498,35 @@ impl<'a, 't, 'g> MpcProver<'a, 't, 'g> {
     }
 
     /// Evaluate a linear combination of allocated variables
-    pub fn eval_lc(
-        &self,
-        lc: &MpcLinearCombination,
-    ) -> Result<AuthenticatedScalarResult, MultiproverError> {
-        // Gather terms together for a batch multiplication
-        let mut coeffs = Vec::with_capacity(lc.terms.len());
-        let mut vals = Vec::with_capacity(lc.terms.len());
-
+    pub fn eval_lc(&self, lc: &MpcLinearCombination) -> AuthenticatedScalarResult {
+        let mut sum = self.fabric.zero_authenticated();
         for (var, coeff) in lc.terms.iter() {
-            coeffs.push(coeff.clone());
-            vals.push({
-                match var.get_type() {
-                    Variable::MultiplierLeft(i) => self.a_L[i].to_owned(),
-                    Variable::MultiplierRight(i) => self.a_R[i].to_owned(),
-                    Variable::MultiplierOutput(i) => self.a_O[i].to_owned(),
-                    Variable::Committed(i) => self.v[i].to_owned(),
-                    Variable::One() => self.borrow_fabric().allocate_public_u64(1),
-                    Variable::Zero() => self.borrow_fabric().allocate_zero(),
-                }
-            })
+            let resolved_val = match var.get_type() {
+                Variable::MultiplierLeft(i) => self.a_L[i].to_owned(),
+                Variable::MultiplierRight(i) => self.a_R[i].to_owned(),
+                Variable::MultiplierOutput(i) => self.a_O[i].to_owned(),
+                Variable::Committed(i) => self.v[i].to_owned(),
+                Variable::One() => self.fabric.one_authenticated(),
+                Variable::Zero() => self.fabric.zero_authenticated(),
+            };
+            sum = sum + coeff * resolved_val;
         }
 
-        Ok(AuthenticatedScalarResult::batch_mul(&coeffs, &vals)
-            .map_err(|err| MultiproverError::Mpc(MpcError::NetworkError(err)))?
-            .iter()
-            .sum())
+        sum
     }
 
     /// Checks whether all the constraints are satisfied, does not prove the statement
     pub fn constraints_satisfied(&self) -> Result<bool, MultiproverError> {
         let mut evals = Vec::with_capacity(self.constraints.len());
         for constraint in self.constraints.iter() {
-            evals.push(self.eval_lc(constraint)?);
+            evals.push(self.eval_lc(constraint));
         }
 
         // Check that all the constraints are satisfied
-        let constraint_evals = AuthenticatedScalarResult::batch_open(&evals)
-            .map_err(|err| MultiproverError::Mpc(MpcError::NetworkError(err)))?
-            .into_iter()
-            .map(|eval| eval.to_scalar())
-            .collect_vec();
-        Ok(constraint_evals.iter().all(|eval| *eval == Scalar::zero()))
+        let open_results = AuthenticatedScalarResult::open_batch(&evals);
+        let evals_open = Handle::current().block_on(join_all(open_results.into_iter()));
+
+        Ok(evals_open.iter().all(|eval| *eval == Scalar::zero()))
     }
 
     /// Consume this `ConstraintSystem` and produce a shared proof
@@ -695,7 +538,10 @@ impl<'a, 't, 'g> MpcProver<'a, 't, 'g> {
     /// than deriving the challenges in secret sharing space as we would have to hash
     /// within the MPC circuit, and implement a hasher on top of the authenticated field.
     #[allow(non_snake_case)]
-    pub fn prove(mut self, bp_gens: &BulletproofGens) -> Result<SharedR1CSProof, MultiproverError> {
+    pub fn prove(
+        mut self,
+        bp_gens: &BulletproofGens,
+    ) -> Result<PartiallySharedR1CSProof, MultiproverError> {
         // Commit a length _suffix_ for the number of high-level variables.
         // We cannot do this in advance because user can commit variables one-by-one,
         // but this suffix provides safe disambiguation because each variable
@@ -707,7 +553,7 @@ impl<'a, 't, 'g> MpcProver<'a, 't, 'g> {
         // Both parties use the same generator chain here. We do this to avoid communication
         // overhead; as a multiscalar mul with a public generator chain will not induce
         // communication, all Pedersen commitments can be computed locally.
-        let gens = bp_gens.as_mpc_values(self.mpc_fabric.clone());
+        let gens = bp_gens.as_mpc_values();
 
         // Multiplicative depth of the circuit
         let n1 = self.a_L.len();
@@ -715,9 +561,7 @@ impl<'a, 't, 'g> MpcProver<'a, 't, 'g> {
         // Allow party 0 to generate the blinding factors and distribute the shares
         // We need 2n1 + 3 blinding factors, 3 for commitments to A_I (inputs) and A_O (outputs)
         // and n1 for each of the s_L, s_R terms that are used to blind a_L and a_R directly.
-        let blinding_factors = self
-            .borrow_fabric()
-            .allocate_random_scalars_batch(3 + 2 * n1);
+        let blinding_factors = self.fabric.random_shared_scalars_authenticated(3 + 2 * n1);
 
         let (i_blinding1, o_blinding1, s_blinding1) = (
             blinding_factors[0].clone(),
@@ -725,65 +569,59 @@ impl<'a, 't, 'g> MpcProver<'a, 't, 'g> {
             blinding_factors[2].clone(),
         );
 
-        let mut s_L1 = blinding_factors[3..3 + n1].to_vec();
-        let mut s_R1 = blinding_factors[3 + n1..3 + 2 * n1].to_vec();
+        let s_L1 = blinding_factors[3..3 + n1].to_vec();
+        let s_R1 = blinding_factors[3 + n1..3 + 2 * n1].to_vec();
 
         // Allocate the Pedersen blinding generator in the network
-        let B_blinding = self
-            .borrow_fabric()
-            .allocate_public_ristretto(self.pc_gens.B_blinding);
+        let B_blinding = self.pc_gens.B_blinding;
 
         // Construct a commitment to the multiplication gate inputs a_L and a_R
         // This commitment has the form:
         //      A_I = <a_L, G> + <a_R, H> + i_blinding * B_blinding
         // where G and H are the vectors of generators for the curve group, and B_blinding
         // is the blinding Pedersen generator.
-        let A_I1 = AuthenticatedRistretto::multiscalar_mul(
+        let A_I1 = StarkPoint::msm_authenticated_iter(
             iter::once(&i_blinding1)
                 .chain(self.a_L.iter())
-                .chain(self.a_R.iter()),
-            iter::once(B_blinding.clone())
-                .chain(gens.G(n1))
-                .chain(gens.H(n1)),
+                .chain(self.a_R.iter())
+                .cloned(),
+            iter::once(B_blinding)
+                .chain(gens.G(n1).copied())
+                .chain(gens.H(n1).copied()),
         )
-        .open_and_authenticate()
-        .map_err(MultiproverError::Mpc)?
-        .compress();
+        .open();
 
         // Construct a commitment to the multiplication gate outputs a_O
         // This commitment has the form
         //      A_O = <a_O, G> + o_blinding * B_blinding
         // where G is a vector of generators for the curve group, and B_blinding
         // is the blinding Pedersen generator.
-        let A_O1 = AuthenticatedRistretto::multiscalar_mul(
-            iter::once(&o_blinding1).chain(self.a_O.iter()),
-            iter::once(B_blinding.clone()).chain(gens.G(n1)),
+        let A_O1 = StarkPoint::msm_authenticated_iter(
+            iter::once(&o_blinding1).chain(self.a_O.iter()).cloned(),
+            iter::once(B_blinding).chain(gens.G(n1).copied()),
         )
-        .open_and_authenticate()
-        .map_err(MultiproverError::Mpc)?
-        .compress();
+        .open();
 
         // Construct a commitment to the blinding factors used in the inner product proofs
         // This commitment has the form
         //    S = <s_L, G> + <s_R, H> + s_blinding * B_blinding
         // where G, H, and B_blinding are generators as above. s_L and s_R are vectors of blinding
         // factors used to hide a_L and a_R in the inner product proofs respectively.
-        let S1 = AuthenticatedRistretto::multiscalar_mul(
+        let S1 = StarkPoint::msm_authenticated_iter(
             iter::once(&s_blinding1)
                 .chain(s_L1.iter())
-                .chain(s_R1.iter()),
-            iter::once(B_blinding.clone())
-                .chain(gens.G(n1))
-                .chain(gens.H(n1)),
+                .chain(s_R1.iter())
+                .cloned(),
+            iter::once(B_blinding)
+                .chain(gens.G(n1).copied())
+                .chain(gens.H(n1).copied()),
         )
-        .open_and_authenticate()
-        .map_err(MultiproverError::Mpc)?
-        .compress();
+        .open();
 
         // Add the commitments to the transcript, these are used to generate Fiat-Shamir challenges
-        self.transcript.append_point(b"A_I1", &A_I1.value());
-        self.transcript.append_point(b"A_O1", &A_O1.value());
-        self.transcript.append_point(b"S1", &S1.value());
+        self.transcript.append_point(b"A_I1", &A_I1);
+        self.transcript.append_point(b"A_O1", &A_O1);
+        self.transcript.append_point(b"S1", &S1);
 
         // Begin phase 2 of the commitments
         // In this phase, we have initialized the Fiat-Shamir transcript with the commitments
@@ -816,10 +654,9 @@ impl<'a, 't, 'g> MpcProver<'a, 't, 'g> {
         // If there are no 2nd phase commitments, zero out the blinding factors to avoid
         // unnecessarily consuming the pre-processing functionality's output
         let blinding_factors = if has_2nd_phase_commitments {
-            self.borrow_fabric()
-                .allocate_random_scalars_batch(3 + 2 * n2)
+            self.fabric.random_shared_scalars_authenticated(3 + 2 * n2)
         } else {
-            self.borrow_fabric().allocate_zeros(3 + 2 * n2)
+            Vec::new()
         };
 
         let (i_blinding2, o_blinding2, s_blinding2) = (
@@ -828,74 +665,73 @@ impl<'a, 't, 'g> MpcProver<'a, 't, 'g> {
             blinding_factors[2].clone(),
         );
 
-        let mut s_L2 = blinding_factors[3..3 + n2].to_vec();
-        let mut s_R2 = blinding_factors[3 + n2..3 + 2 * n2].to_vec();
+        let s_L2 = blinding_factors[3..3 + n2].to_vec();
+        let s_R2 = blinding_factors[3 + n2..3 + 2 * n2].to_vec();
 
         // Commit to the second phase input, outputs, and blinding factors as above
-        // If there are no second phase commitments, we can skip this and reutrn the identity
+        // If there are no second phase commitments, we can skip this and return the identity
         let (A_I2, A_O2, S2) = if has_2nd_phase_commitments {
             // Commit to the left and right inputs to the multiplication gates from phase 2
             // This commitment has the form:
             //      A_I = <a_L, G> + <a_R, H> + i_blinding * B_blinding
             // where G and H are the vectors of generators for the curve group, and B_blinding
             // is the blinding Pedersen generator.
-            let shared_A_I = AuthenticatedRistretto::multiscalar_mul(
+            let shared_A_I = StarkPoint::msm_authenticated_iter(
                 iter::once(&i_blinding2)
                     .chain(self.a_L.iter().skip(n1))
-                    .chain(self.a_R.iter().skip(n1)),
-                iter::once(B_blinding.clone())
-                    .chain(gens.G(n).skip(n1))
-                    .chain(gens.H(n).skip(n1)),
+                    .chain(self.a_R.iter().skip(n1))
+                    .cloned(),
+                iter::once(B_blinding)
+                    .chain(gens.G(n).skip(n1).copied())
+                    .chain(gens.H(n).skip(n1).copied()),
             );
             // Commit to the outputs of the multiplication gates from phase 2
             // This commitment has the form
             //      A_O = <a_O, G> + o_blinding * B_blinding
             // where G is a vector of generators for the curve group, and B_blinding
             // is the blinding Pedersen generator.
-            let shared_A_O = AuthenticatedRistretto::multiscalar_mul(
-                iter::once(&o_blinding2).chain(self.a_O.iter().skip(n1)),
-                iter::once(B_blinding.clone()).chain(gens.G(n).skip(n1)),
+            let shared_A_O = StarkPoint::msm_authenticated_iter(
+                iter::once(&o_blinding2)
+                    .chain(self.a_O.iter().skip(n1))
+                    .cloned(),
+                iter::once(B_blinding).chain(gens.G(n).skip(n1).copied()),
             );
             // Commit to the blinding factors used in the inner product proofs
             // This commitment has the form
             //    S = <s_L, G> + <s_R, H> + s_blinding * B_blinding
             // where G, H, and B_blinding are generators as above. s_L and s_R are vectors of blinding
             // factors used to hide a_L and a_R in the inner product proofs respectively.
-            let shared_S = AuthenticatedRistretto::multiscalar_mul(
+            let shared_S = StarkPoint::msm_authenticated_iter(
                 iter::once(&s_blinding2)
                     .chain(s_L2.iter())
-                    .chain(s_R2.iter()),
+                    .chain(s_R2.iter())
+                    .cloned(),
                 iter::once(B_blinding)
-                    .chain(gens.G(n).skip(n1))
-                    .chain(gens.H(n).skip(n1)),
+                    .chain(gens.G(n).skip(n1).copied())
+                    .chain(gens.H(n).skip(n1).copied()),
             );
 
             // Batch open the values
-            let opened_values = AuthenticatedRistretto::batch_open_and_authenticate(&[
-                shared_A_I, shared_A_O, shared_S,
-            ])
-            .map_err(MultiproverError::Mpc)?;
+            let mut opened_values =
+                AuthenticatedStarkPointResult::open_batch(&[shared_A_I, shared_A_O, shared_S]);
 
             (
-                opened_values[0].compress(),
-                opened_values[1].compress(),
-                opened_values[2].compress(),
+                opened_values.remove(0),
+                opened_values.remove(0),
+                opened_values.remove(0),
             )
         } else {
             (
-                self.borrow_fabric()
-                    .allocate_public_compressed_ristretto(CompressedRistretto::identity()),
-                self.borrow_fabric()
-                    .allocate_public_compressed_ristretto(CompressedRistretto::identity()),
-                self.borrow_fabric()
-                    .allocate_public_compressed_ristretto(CompressedRistretto::identity()),
+                self.fabric.curve_identity(),
+                self.fabric.curve_identity(),
+                self.fabric.curve_identity(),
             )
         };
 
         // Add the commitments to the transcript
-        self.transcript.append_point(b"A_I2", &A_I2.value());
-        self.transcript.append_point(b"A_O2", &A_O2.value());
-        self.transcript.append_point(b"S2", &S2.value());
+        self.transcript.append_point(b"A_I2", &A_I2);
+        self.transcript.append_point(b"A_O2", &A_O2);
+        self.transcript.append_point(b"S2", &S2);
 
         // Compute the inner product challenges y and z
         // These challenges rely on the fact that if a vector v has inner product 0 with
@@ -912,16 +748,16 @@ impl<'a, 't, 'g> MpcProver<'a, 't, 'g> {
         // we are truly proving knowledge of is encoded in the second degree monomial coefficient (t_2)
         // of <l_poly, r_poly>. We commit to the coefficients of l_poly and r_poly, and evaluate
         // the full inner product t(x) = <l(x), r(x)> at a challenge point; where the verifier
-        // substitues in the expected value for t_2
-        let mut l_poly = AuthenticatedVecPoly3::zero(n, self.mpc_fabric.clone());
-        let mut r_poly = AuthenticatedVecPoly3::zero(n, self.mpc_fabric.clone());
+        // substitutes in the expected value for t_2
+        let mut l_poly = AuthenticatedVecPoly3::zero(n, self.fabric.clone());
+        let mut r_poly = AuthenticatedVecPoly3::zero(n, self.fabric.clone());
 
         // A sequence of challenge scalars for a_l \dot a_r - a_o
         // These challenges are public values, we can invert and construct them as plain scalars
         // and then wrap them in network allocated values.
-        let mut exp_y = Scalar::one();
-        let y_inv = y.invert();
-        let exp_y_inv = util::exp_iter(y_inv).take(padded_n).collect::<Vec<_>>();
+        let mut exp_y = self.fabric.one();
+        let y_inv = y.inverse();
+        let exp_y_inv = util::exp_iter_result(y_inv, padded_n, &self.fabric);
 
         // Chain together the blinding factors for the multiplication gate inputs
         let sLsR = s_L1
@@ -935,22 +771,22 @@ impl<'a, 't, 'g> MpcProver<'a, 't, 'g> {
             // for a derivation
 
             // 1st degree coefficient is: a_l + y^-n * w_r
-            l_poly.1[i] = &self.a_L[i] + exp_y_inv[i] * &wR[i];
+            l_poly.1[i] = &self.a_L[i] + &exp_y_inv[i] * &wR[i];
             // 2nd degree coefficient is: a_o
             l_poly.2[i] = self.a_O[i].clone();
             // 3rd degree coefficient is: s_L
             l_poly.3[i] = sl.clone();
 
             // 0th degree coefficient is: w_o - y^n
-            r_poly.0[i] = &wO[i] - exp_y;
+            r_poly.0[i] = &wO[i] - &exp_y;
             // 1st degree coefficient is: y^n * a_r + w_l
-            r_poly.1[i] = exp_y * &self.a_R[i] + &wL[i];
+            r_poly.1[i] = &exp_y * &self.a_R[i] + &wL[i];
             // 2nd degree coefficient is: 0
             // 3rd degree coefficient is: y^n * s_R
-            r_poly.3[i] = exp_y * sr;
+            r_poly.3[i] = &exp_y * sr;
 
-            // Incrementally exponentiate the challenge scalar `y`
-            exp_y *= y;
+            // Incrementally exponential the challenge scalar `y`
+            exp_y = exp_y * &y;
         }
 
         // The core of the proof is two fold. Let the polynomial below be t(x) = <l(x), r(x)>; we prove:
@@ -958,7 +794,7 @@ impl<'a, 't, 'g> MpcProver<'a, 't, 'g> {
         //         the R1CS constraint system's assignment
         //      2. An inner product proof that t(x) = <l(x), r(x)>
         let t_poly = AuthenticatedVecPoly3::special_inner_product(&l_poly, &r_poly);
-        let t_blinding_factors = self.borrow_fabric().allocate_random_scalars_batch(5);
+        let t_blinding_factors = self.fabric.random_shared_scalars(5);
 
         // Commit to the coefficients of t_poly using the blinding factors
         // and batch their openings
@@ -979,26 +815,25 @@ impl<'a, 't, 'g> MpcProver<'a, 't, 'g> {
                 .pc_gens
                 .commit_shared(&t_poly.t6, &t_blinding_factors[4]);
 
-            let opened_values = AuthenticatedRistretto::batch_open_and_authenticate(&[
+            let mut opened_values = AuthenticatedStarkPointResult::open_authenticated_batch(&[
                 t_1_shared, t_3_shared, t_4_shared, t_5_shared, t_6_shared,
-            ])
-            .map_err(MultiproverError::Mpc)?;
+            ]);
 
             (
-                opened_values[0].compress(),
-                opened_values[1].compress(),
-                opened_values[2].compress(),
-                opened_values[3].compress(),
-                opened_values[4].compress(),
+                opened_values.remove(0),
+                opened_values.remove(0),
+                opened_values.remove(0),
+                opened_values.remove(0),
+                opened_values.remove(0),
             )
         };
 
         // Add the commitments to the transcript
-        self.transcript.append_point(b"T_1", &T_1.value());
-        self.transcript.append_point(b"T_3", &T_3.value());
-        self.transcript.append_point(b"T_4", &T_4.value());
-        self.transcript.append_point(b"T_5", &T_5.value());
-        self.transcript.append_point(b"T_6", &T_6.value());
+        self.transcript.append_point(b"T_1", &T_1.value);
+        self.transcript.append_point(b"T_3", &T_3.value);
+        self.transcript.append_point(b"T_4", &T_4.value);
+        self.transcript.append_point(b"T_5", &T_5.value);
+        self.transcript.append_point(b"T_6", &T_6.value);
 
         // Sample two more challenge scalars:
         //    - `u` is used to create a random linear combination of the non-randomized and randomized
@@ -1006,84 +841,78 @@ impl<'a, 't, 'g> MpcProver<'a, 't, 'g> {
         //      deferred constraints, evaluated above
         //    - `x` is used to construct the challenge point `X` for the inner product proof
         let u = self.transcript.challenge_scalar(b"u");
-        let x_scalar = self.transcript.challenge_scalar(b"x");
-        let x = self.borrow_fabric().allocate_public_scalar(x_scalar);
+        let x = self.transcript.challenge_scalar(b"x");
 
         // Because we do not commit to T_2 directly, we commit to its replacement blinding factor that
         // will satisfy the equality: https://doc-internal.dalek.rs/bulletproofs/notes/r1cs_proof/index.html#proving-that-t_2-is-correct
-        let t_2_blinding: AuthenticatedScalar<N, S> = wV
+        let t_2_blinding: AuthenticatedScalarResult = wV
             .iter()
             .zip(self.v_blinding.iter())
             .map(|(c, v_blinding)| c * v_blinding)
             .sum();
 
         let t_blinding_poly = AuthenticatedPoly6 {
-            t1: t_blinding_factors[0].clone(),
+            t1: AuthenticatedScalarResult::new_shared(t_blinding_factors[0].clone()),
             t2: t_2_blinding,
-            t3: t_blinding_factors[1].clone(),
-            t4: t_blinding_factors[2].clone(),
-            t5: t_blinding_factors[3].clone(),
-            t6: t_blinding_factors[4].clone(),
+            t3: AuthenticatedScalarResult::new_shared(t_blinding_factors[1].clone()),
+            t4: AuthenticatedScalarResult::new_shared(t_blinding_factors[2].clone()),
+            t5: AuthenticatedScalarResult::new_shared(t_blinding_factors[3].clone()),
+            t6: AuthenticatedScalarResult::new_shared(t_blinding_factors[4].clone()),
         };
 
         // Evaluate t(x) and \tilde{t}(x) (blinding poly) at the challenge point `x`
         let t_x = t_poly.eval(&x);
         let t_x_blinding = t_blinding_poly.eval(&x);
         let mut l_vec = l_poly.eval(&x);
-        l_vec.append(&mut self.borrow_fabric().allocate_zeros(pad));
+        l_vec.append(&mut self.fabric.zeros_authenticated(pad));
 
         let mut r_vec = r_poly.eval(&x);
-        r_vec.append(&mut self.borrow_fabric().allocate_zeros(pad));
+        r_vec.append(&mut self.fabric.zeros_authenticated(pad));
 
         // To prove correctness, we need the values y^n * a_r and y^n * s_r (see notes)
         // but the values y^n are not known until after committing to a_r, s_r. So, we
         // change the generator chain H to be y^-n * H; giving us a commitment <y^n * a_r, y^-n * H>
-        // Place in a separate closure to limit the borrow's liftime
-        {
-            let borrowed_fabric = self.borrow_fabric();
-            #[allow(clippy::needless_range_loop)]
-            for i in n..padded_n {
-                r_vec[i] = borrowed_fabric.allocate_public_scalar(-exp_y);
-                exp_y *= y;
-            }
-        } // borrowed_fabric lifetime finished
+        // Place in a separate closure to limit the borrow's lifetime
+        let mut exp_y = AuthenticatedScalarResult::new_shared(exp_y);
+        #[allow(clippy::needless_range_loop)]
+        for i in n..padded_n {
+            r_vec[i] = exp_y.clone();
+            exp_y = &exp_y * &y;
+        }
 
         // Take a random linear combination (parameterized by `u`) of the phase 1 and phase 2 blinding factors
-        let i_blinding = i_blinding1 + u * i_blinding2;
-        let o_blinding = o_blinding1 + u * o_blinding2;
-        let s_blinding = s_blinding1 + u * s_blinding2;
+        let i_blinding = i_blinding1 + &u * i_blinding2;
+        let o_blinding = o_blinding1 + &u * o_blinding2;
+        let s_blinding = s_blinding1 + &u * s_blinding2;
 
         let e_blinding = &x * (i_blinding + &x * (o_blinding + &x * s_blinding));
 
         // Open the final set of transcript values
         let (t_x_open, t_x_blinding_open, e_blinding_open) = {
-            let opened_values =
-                AuthenticatedScalar::batch_open_and_authenticate(&[t_x, t_x_blinding, e_blinding])
-                    .map_err(MultiproverError::Mpc)?;
+            let mut opened_values =
+                AuthenticatedScalarResult::open_batch(&[t_x, t_x_blinding, e_blinding]);
 
             (
-                opened_values[0].clone(),
-                opened_values[1].clone(),
-                opened_values[2].clone(),
+                opened_values.remove(0),
+                opened_values.remove(0),
+                opened_values.remove(0),
             )
         };
 
         // Append values to transcript
-        self.transcript.append_scalar(b"t_x", &t_x_open.to_scalar());
+        self.transcript.append_scalar(b"t_x", &t_x_open);
         self.transcript
-            .append_scalar(b"t_x_blinding", &t_x_blinding_open.to_scalar());
+            .append_scalar(b"t_x_blinding", &t_x_blinding_open);
         self.transcript
-            .append_scalar(b"e_blinding", &e_blinding_open.to_scalar());
+            .append_scalar(b"e_blinding", &e_blinding_open);
 
         // Sample another challenge scalar, this time for the inner product proof
         let w = self.transcript.challenge_scalar(b"w");
-        let Q = self
-            .borrow_fabric()
-            .allocate_public_ristretto(w * self.pc_gens.B);
+        let Q = w * self.pc_gens.B;
 
         // Chain together the generators from the phase 1 proof and those generators multiplied by
         // `u`; which represent the generators for the phase 2 proof
-        let G_factors = iter::repeat(Scalar::one())
+        let G_factors = iter::repeat(self.fabric.one())
             .take(n1)
             .chain(iter::repeat(u).take(n2 + pad))
             .collect::<Vec<_>>();
@@ -1095,39 +924,29 @@ impl<'a, 't, 'g> MpcProver<'a, 't, 'g> {
 
         // Finally, build the inner product proof for the R1CS relation
         let ipp = SharedInnerProductProof::create(
-            self.transcript,
-            &Q,
+            &mut self.transcript,
+            Q,
             &G_factors,
             &H_factors,
-            gens.G(padded_n).collect(),
-            gens.H(padded_n).collect(),
+            gens.G(padded_n).copied().collect(),
+            gens.H(padded_n).copied().collect(),
             l_vec,
             r_vec,
-            self.mpc_fabric.clone(),
+            &self.fabric,
         )?;
 
-        // Clear all the allocated values after proof is completed
-        for mut scalar in s_L1
-            .iter_mut()
-            .chain(s_L2.iter_mut())
-            .chain(s_R1.iter_mut())
-            .chain(s_R2.iter_mut())
-        {
-            scalar.clear();
-        }
-
-        Ok(SharedR1CSProof {
+        Ok(PartiallySharedR1CSProof {
             A_I1,
             A_O1,
             S1,
             A_I2,
             A_O2,
             S2,
-            T_1,
-            T_3,
-            T_4,
-            T_5,
-            T_6,
+            T_1: T_1.value,
+            T_3: T_3.value,
+            T_4: T_4.value,
+            T_5: T_5.value,
+            T_6: T_6.value,
             t_x: t_x_open,
             t_x_blinding: t_x_blinding_open,
             e_blinding: e_blinding_open,
