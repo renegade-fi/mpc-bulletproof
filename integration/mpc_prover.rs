@@ -14,7 +14,7 @@ use mpc_bulletproof::{
 };
 
 use itertools::Itertools;
-use merlin::Transcript;
+use merlin::HashChainTranscript as Transcript;
 use mpc_stark::{
     algebra::{
         authenticated_stark_point::AuthenticatedStarkPointOpenResult, scalar::Scalar,

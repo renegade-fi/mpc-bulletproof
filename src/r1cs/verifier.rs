@@ -1,7 +1,7 @@
 #![allow(non_snake_case)]
 
 use itertools::Itertools;
-use merlin::Transcript;
+use merlin::HashChainTranscript as Transcript;
 use mpc_stark::algebra::scalar::Scalar;
 use mpc_stark::algebra::stark_curve::StarkPoint;
 
@@ -503,9 +503,9 @@ impl<'t, 'g> Verifier<'t, 'g> {
         // Create a `TranscriptRng` from the transcript. The verifier
         // has no witness data to commit, so this just mixes external
         // randomness into the existing transcript.
-        use rand::thread_rng;
-        let mut rng = self.transcript.build_rng().finalize(&mut thread_rng());
-        let r = Scalar::random(&mut rng);
+        // use rand::thread_rng;
+        // let mut rng = self.transcript.build_rng().finalize(&mut thread_rng());
+        let r = self.transcript.challenge_scalar(b"r");
 
         let xx = x * x;
         let rxx = r * xx;

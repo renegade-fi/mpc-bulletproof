@@ -9,7 +9,7 @@ use crate::{
     util, BulletproofGens, PedersenGens,
 };
 use futures::future::join_all;
-use merlin::Transcript;
+use merlin::HashChainTranscript as Transcript;
 use mpc_stark::{
     algebra::{
         authenticated_scalar::AuthenticatedScalarResult,
