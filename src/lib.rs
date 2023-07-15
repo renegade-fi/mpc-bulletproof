@@ -30,7 +30,7 @@ mod inner_product_proof;
 #[cfg(feature = "integration_test")]
 pub use inner_product_proof::*;
 // mod range_proof;
-mod transcript;
+pub mod transcript;
 
 pub use crate::errors::ProofError;
 pub use crate::generators::{BulletproofGens, BulletproofGensShare, PedersenGens};

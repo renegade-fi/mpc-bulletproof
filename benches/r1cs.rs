@@ -13,7 +13,7 @@ use criterion::Criterion;
 // someone wants to figure a way to use #[path] attributes or
 // something to avoid the duplication.
 
-use merlin::Transcript;
+use merlin::HashChainTranscript as Transcript;
 use mpc_bulletproof::r1cs::*;
 use mpc_bulletproof::{BulletproofGens, PedersenGens};
 use mpc_stark::algebra::scalar::Scalar;

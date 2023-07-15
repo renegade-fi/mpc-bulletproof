@@ -296,7 +296,7 @@ impl<S: Into<Scalar>> Mul<S> for LinearCombination {
 
 #[cfg(test)]
 mod tests {
-    use merlin::Transcript;
+    use merlin::HashChainTranscript as Transcript;
     use mpc_stark::algebra::scalar::Scalar;
 
     use crate::{

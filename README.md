@@ -102,7 +102,7 @@ The following example shows how to create and verify a 32-bit rangeproof.
 # use curve25519_dalek::scalar::Scalar;
 #
 # extern crate merlin;
-# use merlin::Transcript;
+# use merlin::HashChainTranscript as Transcript;
 #
 # extern crate bulletproofs;
 # use bulletproofs::{BulletproofGens, PedersenGens, RangeProof};
