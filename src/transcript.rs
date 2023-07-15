@@ -3,7 +3,7 @@
 use std::sync::Arc;
 use std::sync::Mutex;
 
-use merlin::Transcript as MerlinTranscript;
+use merlin::{keccak256, HashChainTranscript};
 use mpc_stark::algebra::scalar::ScalarResult;
 use mpc_stark::algebra::stark_curve::StarkPointResult;
 use mpc_stark::algebra::{scalar::Scalar, stark_curve::StarkPoint};
@@ -54,37 +54,42 @@ pub trait TranscriptProtocol {
 // | Single Prover Transcript |
 // ----------------------------
 
-impl TranscriptProtocol for MerlinTranscript {
+impl TranscriptProtocol for HashChainTranscript {
     fn rangeproof_domain_sep(&mut self, n: u64, m: u64) {
-        self.append_message(b"dom-sep", b"rangeproof v1");
+        self.append_message(
+            b"dom-sep",
+            &HashChainTranscript::pad_label(b"rangeproof v1"),
+        );
         self.append_u64(b"n", n);
         self.append_u64(b"m", m);
     }
 
     fn innerproduct_domain_sep(&mut self, n: u64) {
-        self.append_message(b"dom-sep", b"ipp v1");
+        self.append_message(b"dom-sep", &HashChainTranscript::pad_label(b"ipp v1"));
         self.append_u64(b"n", n);
     }
 
     fn r1cs_domain_sep(&mut self) {
-        self.append_message(b"dom-sep", b"r1cs v1");
+        self.append_message(b"dom-sep", &HashChainTranscript::pad_label(b"r1cs v1"));
     }
 
     fn r1cs_1phase_domain_sep(&mut self) {
-        self.append_message(b"dom-sep", b"r1cs-1phase");
+        self.append_message(b"dom-sep", &HashChainTranscript::pad_label(b"r1cs-1phase"));
     }
 
     fn r1cs_2phase_domain_sep(&mut self) {
-        self.append_message(b"dom-sep", b"r1cs-2phase");
+        self.append_message(b"dom-sep", &HashChainTranscript::pad_label(b"r1cs-2phase"));
     }
 
     fn append_scalar(&mut self, label: &'static [u8], scalar: &Scalar) {
-        let buf = scalar.to_bytes_be();
+        // Reverse the scalar bytes so that it is absorbed into the transcript
+        // in little-endian order, matching what is done in the Cairo implementation.
+        let buf: Vec<u8> = scalar.to_bytes_be().iter().rev().cloned().collect();
         self.append_message(label, &buf);
     }
 
     fn append_point(&mut self, label: &'static [u8], point: &StarkPoint) {
-        let buf = point.to_bytes();
+        let buf = point.to_transcript_bytes();
         self.append_message(label, &buf);
     }
 
@@ -98,17 +103,30 @@ impl TranscriptProtocol for MerlinTranscript {
         if point == &StarkPoint::identity() {
             Err(ProofError::VerificationError)
         } else {
-            let buf = point.to_bytes();
+            let buf = point.to_transcript_bytes();
             self.append_message(label, &buf);
             Ok(())
         }
     }
 
     fn challenge_scalar(&mut self, label: &'static [u8]) -> Scalar {
-        let mut buf = [0u8; 64];
-        self.challenge_bytes(label, &mut buf);
+        let mut low_u256 = [0u8; 32];
+        self.challenge_bytes(label, &mut low_u256);
 
-        Scalar::from_be_bytes_mod_order(&buf)
+        // Need to chain another hash to get extra challenge bytes
+        let mut high_u256 = [0u8; 32];
+        keccak256(&low_u256, &mut high_u256);
+
+        // Reverse the challenge bytes so they are interpreted in big-endian order,
+        // matching the Cairo implementation
+        let challenge_be: Vec<u8> = low_u256
+            .iter()
+            .chain(high_u256.iter())
+            .rev()
+            .cloned()
+            .collect();
+
+        Scalar::from_be_bytes_mod_order(&challenge_be)
     }
 }
 
@@ -123,7 +141,7 @@ impl TranscriptProtocol for MerlinTranscript {
 /// transcript as results of inputs and outputs become available to the fabric
 pub struct MpcTranscript {
     /// The underlying Merlin transcript
-    transcript: Arc<Mutex<MerlinTranscript>>,
+    transcript: Arc<Mutex<HashChainTranscript>>,
     /// The latest operation ID in the transcript, the next operation in the transcript
     /// will "virtually depend" on this operation to sequence itself behind the current op
     latest_op_id: ResultId,
@@ -133,7 +151,7 @@ pub struct MpcTranscript {
 
 impl MpcTranscript {
     /// Constructor
-    pub fn new(transcript: MerlinTranscript, fabric: MpcFabric) -> Self {
+    pub fn new(transcript: HashChainTranscript, fabric: MpcFabric) -> Self {
         Self {
             transcript: Arc::new(Mutex::new(transcript)),
             latest_op_id: ResultId::default(),

@@ -6,7 +6,7 @@ extern crate mpc_bulletproof;
 extern crate rand;
 
 use lazy_static::lazy_static;
-use merlin::Transcript;
+use merlin::HashChainTranscript as Transcript;
 use mpc_bulletproof::r1cs::*;
 use mpc_bulletproof::{BulletproofGens, PedersenGens};
 use mpc_stark::algebra::scalar::Scalar;

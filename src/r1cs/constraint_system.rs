@@ -3,7 +3,7 @@
 use std::collections::HashSet;
 
 use super::{LinearCombination, R1CSError, Variable};
-use merlin::Transcript;
+use merlin::HashChainTranscript as Transcript;
 use mpc_stark::algebra::scalar::Scalar;
 use serde::{Deserialize, Serialize};
 
