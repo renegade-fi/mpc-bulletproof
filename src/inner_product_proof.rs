@@ -9,7 +9,7 @@ use mpc_stark::algebra::scalar::{Scalar, SCALAR_BYTES};
 use mpc_stark::algebra::stark_curve::{StarkPoint, STARK_POINT_BYTES};
 
 use core::iter;
-use merlin::Transcript;
+use merlin::HashChainTranscript as Transcript;
 
 use crate::errors::ProofError;
 use crate::transcript::TranscriptProtocol;

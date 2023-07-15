@@ -66,7 +66,7 @@ use bulletproofs::r1cs::*;
 use bulletproofs::{BulletproofGens, PedersenGens};
 use curve25519_dalek::ristretto::CompressedRistretto;
 use curve25519_dalek::scalar::Scalar;
-use merlin::Transcript;
+use merlin::HashChainTranscript as Transcript;
 use rand::thread_rng;
 
 // Shuffle gadget (documented in markdown file)
@@ -147,7 +147,7 @@ For simplicity, in this example the `prove` function does not take a list of bli
 # use bulletproofs::{BulletproofGens, PedersenGens};
 # use curve25519_dalek::ristretto::CompressedRistretto;
 # use curve25519_dalek::scalar::Scalar;
-# use merlin::Transcript;
+# use merlin::HashChainTranscript as Transcript;
 # use rand::thread_rng;
 # 
 # // Shuffle gadget (documented in markdown file)
@@ -254,7 +254,7 @@ The verifier receives a proof, and a list of committed inputs and outputs, from 
 # use bulletproofs::{BulletproofGens, PedersenGens};
 # use curve25519_dalek::ristretto::CompressedRistretto;
 # use curve25519_dalek::scalar::Scalar;
-# use merlin::Transcript;
+# use merlin::HashChainTranscript as Transcript;
 # use rand::thread_rng;
 # 
 # // Shuffle gadget (documented in markdown file)
@@ -394,7 +394,7 @@ Because only the prover knows the scalar values of the inputs and outputs, and t
 # use bulletproofs::{BulletproofGens, PedersenGens};
 # use curve25519_dalek::ristretto::CompressedRistretto;
 # use curve25519_dalek::scalar::Scalar;
-# use merlin::Transcript;
+# use merlin::HashChainTranscript as Transcript;
 # use rand::thread_rng;
 # 
 # // Shuffle gadget (documented in markdown file)
