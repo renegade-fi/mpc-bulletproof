@@ -4,7 +4,7 @@ use core::fmt::{Debug, Formatter, Result};
 use core::hash::Hash;
 use core::ops::{AddAssign, SubAssign};
 use mpc_stark::algebra::scalar::{Scalar, ScalarResult};
-use mpc_stark::fabric::MpcFabric;
+use mpc_stark::MpcFabric;
 use std::collections::HashMap;
 use std::iter::FromIterator;
 use std::ops::{Add, Mul, Neg, Sub};

@@ -6,7 +6,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 use mpc_stark::{
     algebra::scalar::{Scalar, ScalarResult},
-    fabric::MpcFabric,
+    MpcFabric,
 };
 
 use crate::inner_product_proof::inner_product;
