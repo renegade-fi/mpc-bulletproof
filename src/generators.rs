@@ -52,7 +52,7 @@ impl PedersenGens {
     pub fn commit_shared(
         &self,
         value: &AuthenticatedScalarResult,
-        blinding: &ScalarResult,
+        blinding: &AuthenticatedScalarResult,
     ) -> AuthenticatedStarkPointResult {
         value * self.B + blinding * self.B_blinding
     }

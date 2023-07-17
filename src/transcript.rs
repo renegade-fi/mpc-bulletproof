@@ -7,9 +7,9 @@ use merlin::Transcript as MerlinTranscript;
 use mpc_stark::algebra::scalar::ScalarResult;
 use mpc_stark::algebra::stark_curve::StarkPointResult;
 use mpc_stark::algebra::{scalar::Scalar, stark_curve::StarkPoint};
-use mpc_stark::fabric::MpcFabric;
-use mpc_stark::fabric::ResultId;
-use mpc_stark::fabric::ResultValue;
+use mpc_stark::MpcFabric;
+use mpc_stark::ResultId;
+use mpc_stark::ResultValue;
 
 use crate::errors::ProofError;
 
@@ -126,7 +126,7 @@ pub struct MpcTranscript {
     transcript: Arc<Mutex<MerlinTranscript>>,
     /// The latest operation ID in the transcript, the next operation in the transcript
     /// will "virtually depend" on this operation to sequence itself behind the current op
-    latest_op_id: Option<ResultId>,
+    latest_op_id: ResultId,
     /// A reference to the underlying MPC fabric
     fabric: MpcFabric,
 }
@@ -136,48 +136,70 @@ impl MpcTranscript {
     pub fn new(transcript: MerlinTranscript, fabric: MpcFabric) -> Self {
         Self {
             transcript: Arc::new(Mutex::new(transcript)),
-            latest_op_id: None,
+            latest_op_id: ResultId::default(),
             fabric,
         }
     }
 
     /// Append a domain separator for an `n`-bit, `m`-party range proof.
-    pub fn rangeproof_domain_sep(&mut self, n: u64, m: u64) {
-        let mut locked_transcript = self.transcript.lock().expect(ERR_LOCK_POISONED);
-        locked_transcript.append_message(b"dom-sep", b"rangeproof v1");
-        locked_transcript.append_u64(b"n", n);
-        locked_transcript.append_u64(b"m", m);
-    }
-
-    /// Append a domain separator for an `n`-bit, `m`-party range proof.
     pub fn innerproduct_domain_sep(&mut self, n: u64) {
-        let mut locked_transcript = self.transcript.lock().expect(ERR_LOCK_POISONED);
-        locked_transcript.append_message(b"dom-sep", b"ipp v1");
-        locked_transcript.append_u64(b"n", n);
+        let transcript_ref = self.transcript.clone();
+        self.fabric
+            .new_gate_op::<_, Scalar>(vec![self.latest_op_id], move |_args| {
+                let mut locked_transcript = transcript_ref.lock().expect(ERR_LOCK_POISONED);
+                locked_transcript.append_message(b"dom-sep", b"ipp v1");
+                locked_transcript.append_u64(b"n", n);
+
+                ResultValue::Scalar(Scalar::zero())
+            });
     }
 
     /// Append a domain separator for a constraint system.
     pub fn r1cs_domain_sep(&mut self) {
-        let mut locked_transcript = self.transcript.lock().expect(ERR_LOCK_POISONED);
-        locked_transcript.append_message(b"dom-sep", b"r1cs v1");
+        let transcript_ref = self.transcript.clone();
+        self.fabric
+            .new_gate_op::<_, Scalar>(vec![self.latest_op_id], move |_args| {
+                let mut locked_transcript = transcript_ref.lock().expect(ERR_LOCK_POISONED);
+                locked_transcript.append_message(b"dom-sep", b"r1cs v1");
+
+                ResultValue::Scalar(Scalar::zero())
+            });
     }
 
     /// Commit a domain separator for a CS without randomized constraints.
     pub fn r1cs_1phase_domain_sep(&mut self) {
-        let mut locked_transcript = self.transcript.lock().expect(ERR_LOCK_POISONED);
-        locked_transcript.append_message(b"dom-sep", b"r1cs-1phase");
+        let transcript_ref = self.transcript.clone();
+        self.fabric
+            .new_gate_op::<_, Scalar>(vec![self.latest_op_id], move |_args| {
+                let mut locked_transcript = transcript_ref.lock().expect(ERR_LOCK_POISONED);
+                locked_transcript.append_message(b"dom-sep", b"r1cs-1phase");
+
+                ResultValue::Scalar(Scalar::zero())
+            });
     }
 
     /// Commit a domain separator for a CS with randomized constraints.
     pub fn r1cs_2phase_domain_sep(&mut self) {
-        let mut locked_transcript = self.transcript.lock().expect(ERR_LOCK_POISONED);
-        locked_transcript.append_message(b"dom-sep", b"r1cs-2phase");
+        let transcript_ref = self.transcript.clone();
+        self.fabric
+            .new_gate_op::<_, Scalar>(vec![self.latest_op_id], move |_args| {
+                let mut locked_transcript = transcript_ref.lock().expect(ERR_LOCK_POISONED);
+                locked_transcript.append_message(b"dom-sep", b"r1cs-2phase");
+
+                ResultValue::Scalar(Scalar::zero())
+            });
     }
 
     /// Append a `u64` with the given label
     pub fn append_u64(&mut self, label: &'static [u8], value: u64) {
-        let mut locked_transcript = self.transcript.lock().expect(ERR_LOCK_POISONED);
-        locked_transcript.append_u64(label, value);
+        let transcript_ref = self.transcript.clone();
+        self.fabric
+            .new_gate_op::<_, Scalar>(vec![self.latest_op_id], move |_args| {
+                let mut locked_transcript = transcript_ref.lock().expect(ERR_LOCK_POISONED);
+                locked_transcript.append_u64(label, value);
+
+                ResultValue::Scalar(Scalar::zero())
+            });
     }
 
     /// Append a `scalar` with the given `label`.
@@ -185,7 +207,7 @@ impl MpcTranscript {
         // Allocate a dummy operation that will be used to sequence the transcript, the result
         // is the identity, but has the side effect of updating the underlying strobe state
         // Further operations will "depend" on this operation so that they are sequenced behind it
-        let mut dependencies = self.latest_op_id.map(|id| vec![id]).unwrap_or_default();
+        let mut dependencies = vec![self.latest_op_id];
         dependencies.append(&mut scalar.op_ids());
 
         let transcript_ref = self.transcript.clone();
@@ -198,13 +220,13 @@ impl MpcTranscript {
             ResultValue::Scalar(scalar_val)
         });
 
-        self.latest_op_id = Some(op_res.op_ids()[0]);
+        self.latest_op_id = op_res.op_ids()[0];
     }
 
     /// Append a `point` with the given `label`.
     pub fn append_point(&mut self, label: &'static [u8], point: &StarkPointResult) {
         // As in `append_scalar` allocate a dummy op to sequence further operations behind
-        let mut dependencies = vec![self.latest_op_id.unwrap_or_default()];
+        let mut dependencies = vec![self.latest_op_id];
         dependencies.append(&mut point.op_ids());
 
         let transcript_ref = self.transcript.clone();
@@ -217,13 +239,14 @@ impl MpcTranscript {
             ResultValue::Point(point_val)
         });
 
-        self.latest_op_id = Some(op_res.op_ids()[0]);
+        self.latest_op_id = op_res.op_ids()[0];
     }
 
     /// Compute a `label`ed challenge variable.
     pub fn challenge_scalar(&mut self, label: &'static [u8]) -> ScalarResult {
         // As in `append_scalar` allocate a dummy op to sequence further operations behind
-        let dependencies = self.latest_op_id.map(|id| vec![id]).unwrap_or_default();
+        let dependencies = vec![self.latest_op_id];
+
         let transcript_ref = self.transcript.clone();
         let op_res: ScalarResult = self.fabric.new_gate_op(dependencies, move |_args| {
             let mut locked_transcript = transcript_ref.lock().expect(ERR_LOCK_POISONED);
@@ -232,7 +255,7 @@ impl MpcTranscript {
             ResultValue::Scalar(res)
         });
 
-        self.latest_op_id = Some(op_res.op_ids()[0]);
+        self.latest_op_id = op_res.op_ids()[0];
         op_res
     }
 }

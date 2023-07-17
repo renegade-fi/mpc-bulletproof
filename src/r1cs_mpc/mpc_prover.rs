@@ -21,8 +21,8 @@ use mpc_stark::{
     },
     beaver::SharedValueSource,
     error::MpcError,
-    fabric::MpcFabric,
     network::{PartyId, QuicTwoPartyNet},
+    MpcFabric,
 };
 use tokio::runtime::Handle;
 
@@ -402,15 +402,14 @@ impl<'a, 't, 'g> MpcProver<'a, 't, 'g> {
         v_blinding: Scalar,
     ) -> Result<(AuthenticatedStarkPointOpenResult, MpcVariable), MpcError> {
         // Commit to the input, open the commitment, and add the commitment to the transcript.
-        let blinder = self.fabric.allocate_scalar(v_blinding);
+        let blinder = self.fabric.allocate_preshared_scalar(v_blinding);
         let value_commit = self.pc_gens.commit_shared(v, &blinder).open_authenticated();
         self.transcript.append_point(b"V", &value_commit.value);
 
         // Add the value to the constraint system
         let i = self.v.len();
         self.v.push(v.clone());
-        self.v_blinding
-            .push(AuthenticatedScalarResult::new_shared(blinder));
+        self.v_blinding.push(blinder);
 
         Ok((
             value_commit,
@@ -656,7 +655,7 @@ impl<'a, 't, 'g> MpcProver<'a, 't, 'g> {
         let blinding_factors = if has_2nd_phase_commitments {
             self.fabric.random_shared_scalars_authenticated(3 + 2 * n2)
         } else {
-            Vec::new()
+            self.fabric.zeros_authenticated(3 + 2 * n2)
         };
 
         let (i_blinding2, o_blinding2, s_blinding2) = (
@@ -794,7 +793,7 @@ impl<'a, 't, 'g> MpcProver<'a, 't, 'g> {
         //         the R1CS constraint system's assignment
         //      2. An inner product proof that t(x) = <l(x), r(x)>
         let t_poly = AuthenticatedVecPoly3::special_inner_product(&l_poly, &r_poly);
-        let t_blinding_factors = self.fabric.random_shared_scalars(5);
+        let mut t_blinding_factors = self.fabric.random_shared_scalars_authenticated(5);
 
         // Commit to the coefficients of t_poly using the blinding factors
         // and batch their openings
@@ -852,12 +851,12 @@ impl<'a, 't, 'g> MpcProver<'a, 't, 'g> {
             .sum();
 
         let t_blinding_poly = AuthenticatedPoly6 {
-            t1: AuthenticatedScalarResult::new_shared(t_blinding_factors[0].clone()),
+            t1: t_blinding_factors.remove(0),
             t2: t_2_blinding,
-            t3: AuthenticatedScalarResult::new_shared(t_blinding_factors[1].clone()),
-            t4: AuthenticatedScalarResult::new_shared(t_blinding_factors[2].clone()),
-            t5: AuthenticatedScalarResult::new_shared(t_blinding_factors[3].clone()),
-            t6: AuthenticatedScalarResult::new_shared(t_blinding_factors[4].clone()),
+            t3: t_blinding_factors.remove(0),
+            t4: t_blinding_factors.remove(0),
+            t5: t_blinding_factors.remove(0),
+            t6: t_blinding_factors.remove(0),
         };
 
         // Evaluate t(x) and \tilde{t}(x) (blinding poly) at the challenge point `x`

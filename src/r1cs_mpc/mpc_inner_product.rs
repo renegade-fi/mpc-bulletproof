@@ -13,7 +13,7 @@ use mpc_stark::algebra::authenticated_stark_point::AuthenticatedStarkPointOpenRe
 use mpc_stark::algebra::scalar::{Scalar, ScalarResult};
 use mpc_stark::algebra::stark_curve::{StarkPoint, StarkPointResult};
 use mpc_stark::error::MpcError;
-use mpc_stark::fabric::MpcFabric;
+use mpc_stark::MpcFabric;
 use tokio::runtime::Handle;
 
 use core::iter;
@@ -244,19 +244,17 @@ impl SharedInnerProductProof {
     ///
     /// The resulting type is `InnerProductProof` as the values are no longer secret shared
     pub fn open(&self) -> Result<InnerProductProof, MultiproverError> {
-        // Open the scalars (a, b)
-        // The Ristretto points are already opened as a result of running the protocol
-        let a_open = self.a.open_authenticated();
-        let b_open = self.b.open_authenticated();
-
         // Block on the results of the openings
         macro_rules! await_res {
             ($x:expr) => {
                 Handle::current().block_on($x)
             };
         }
-        let a = await_res!(a_open).map_err(MultiproverError::Mpc)?;
-        let b = await_res!(b_open).map_err(MultiproverError::Mpc)?;
+
+        // Open the scalars (a, b)
+        // The Ristretto points are already opened as a result of running the protocol
+        let a = await_res!(self.a.open_authenticated()).map_err(MultiproverError::Mpc)?;
+        let b = await_res!(self.b.open_authenticated()).map_err(MultiproverError::Mpc)?;
 
         let L_vec = await_res!(join_all(self.L_vec.iter().cloned()))
             .into_iter()
