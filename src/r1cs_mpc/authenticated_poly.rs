@@ -12,7 +12,7 @@ use core::panic;
 use alloc::vec::Vec;
 use mpc_stark::{
     algebra::{authenticated_scalar::AuthenticatedScalarResult, scalar::ScalarResult},
-    fabric::MpcFabric,
+    MpcFabric,
 };
 
 /// Represents a degree-1 vector polynomial \\(\mathbf{a} + \mathbf{b} \cdot x\\).
