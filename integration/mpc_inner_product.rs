@@ -17,8 +17,7 @@ use mpc_stark::{
         scalar::{Scalar, ScalarResult},
         stark_curve::StarkPoint,
     },
-    fabric::MpcFabric,
-    PARTY0, PARTY1,
+    MpcFabric, PARTY0, PARTY1,
 };
 use rand::{rngs::OsRng, thread_rng, Rng, RngCore};
 use sha3::Sha3_512;
