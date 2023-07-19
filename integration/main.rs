@@ -2,8 +2,10 @@
 //!     https://github.com/renegade-fi/MPC-Ristretto
 #![cfg(feature = "integration_test")]
 
+mod helpers;
 mod mpc_inner_product;
 mod mpc_prover;
+mod transcript;
 
 use std::{borrow::Borrow, net::SocketAddr, process::exit};
 
@@ -11,7 +13,7 @@ use clap::Parser;
 use colored::Colorize;
 use dns_lookup::lookup_host;
 use mpc_stark::{
-    algebra::scalar::Scalar, beaver::SharedValueSource, fabric::MpcFabric, network::QuicTwoPartyNet,
+    algebra::scalar::Scalar, beaver::SharedValueSource, network::QuicTwoPartyNet, MpcFabric,
 };
 use tokio::runtime::{Builder as RuntimeBuilder, Handle};
 

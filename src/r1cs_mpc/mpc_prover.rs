@@ -460,7 +460,7 @@ impl<'a, 't, 'g> MpcProver<'a, 't, 'g> {
                         wO[i] = &wO[i] + &exp_z * coeff;
                     }
                     Variable::Committed(i) => {
-                        wV[i] = &wV[i] + &exp_z * coeff;
+                        wV[i] = &wV[i] - &exp_z * coeff;
                     }
                     Variable::One() | Variable::Zero() => {
                         // The prover doesn't need to handle constant terms
@@ -794,7 +794,6 @@ impl<'a, 't, 'g> MpcProver<'a, 't, 'g> {
         //      2. An inner product proof that t(x) = <l(x), r(x)>
         let t_poly = AuthenticatedVecPoly3::special_inner_product(&l_poly, &r_poly);
         let mut t_blinding_factors = self.fabric.random_shared_scalars_authenticated(5);
-
         // Commit to the coefficients of t_poly using the blinding factors
         // and batch their openings
         let (T_1, T_3, T_4, T_5, T_6) = {
@@ -872,7 +871,7 @@ impl<'a, 't, 'g> MpcProver<'a, 't, 'g> {
         // but the values y^n are not known until after committing to a_r, s_r. So, we
         // change the generator chain H to be y^-n * H; giving us a commitment <y^n * a_r, y^-n * H>
         // Place in a separate closure to limit the borrow's lifetime
-        let mut exp_y = AuthenticatedScalarResult::new_shared(exp_y);
+        let mut exp_y = -self.fabric.one_authenticated() * exp_y;
         #[allow(clippy::needless_range_loop)]
         for i in n..padded_n {
             r_vec[i] = exp_y.clone();
