@@ -20,7 +20,8 @@ use mpc_stark::{
         authenticated_stark_point::AuthenticatedStarkPointOpenResult, scalar::Scalar,
         stark_curve::StarkPoint,
     },
-    fabric::MpcFabric,
+    error::MpcError,
+    MpcFabric, PARTY0, PARTY1,
 };
 use rand::rngs::OsRng;
 use tokio::runtime::Handle;
@@ -106,7 +107,7 @@ impl<'a> SimpleCircuit {
 
         let (a_commit, a_vars) = prover
             .batch_commit(
-                0, /* owning_party */
+                PARTY0,
                 a.iter().copied(),
                 &[Scalar::random(&mut rng), Scalar::random(&mut rng)],
             )
@@ -114,18 +115,14 @@ impl<'a> SimpleCircuit {
 
         let (b_commit, b_vars) = prover
             .batch_commit(
-                1, /* owning_party */
+                PARTY1,
                 b.iter().copied(),
                 &[Scalar::random(&mut rng), Scalar::random(&mut rng)],
             )
             .map_err(|err| format!("error sharing values: {:?}", err))?;
 
         let (c_commit, c_var) = prover
-            .commit(
-                0, /* owning_party */
-                expected_out,
-                Scalar::random(&mut rng),
-            )
+            .commit(0 /* owning_party */, expected_out, Scalar::from(1))
             .map_err(|err| format!("Error committing to output: {:?}", err))?;
 
         // Apply the gadget to generate the constraints, then prove
@@ -151,7 +148,6 @@ impl<'a> SimpleCircuit {
 
         // Open the proof and the commitments
         let opened_proof = proof.open()?;
-        // .map_err(|err| format!("Error opening proof: {:?}", err))?;
         let opened_a_comms: Vec<StarkPoint> = await_vec!(a_commit)
             .into_iter()
             .collect::<Result<Vec<_>, _>>()
@@ -332,7 +328,7 @@ fn test_r1cs_proof_malleability(test_args: &IntegrationTestArgs) -> Result<(), S
     let pc_gens = PedersenGens::default();
     let bp_gens = BulletproofGens::new(2, 1);
 
-    let (mut proof, a_comm, b_comm, c_comm) = SimpleCircuit::prove(
+    let (mut proof, _, _, _) = SimpleCircuit::prove(
         &pc_gens,
         &bp_gens,
         &my_scalars,
@@ -344,18 +340,22 @@ fn test_r1cs_proof_malleability(test_args: &IntegrationTestArgs) -> Result<(), S
     // Party 1 tries to corrupt the proof
     if test_args.party_id == 1 {
         proof.ipp_proof.a = proof.ipp_proof.a + Scalar::from(10u64);
+    } else {
+        // Party 2 must perform an operation to keep the computation graphs in sync
+        proof.ipp_proof.a = proof.ipp_proof.a + Scalar::from(0)
     }
 
-    SimpleCircuit::verify(proof, a_comm, b_comm, c_comm)
+    // Verify that opening the proof fails
+    proof
+        .open()
         .err()
-        .map(|err| {
-            if let MultiproverError::ProverError(R1CSError::VerificationError) = err {
-                Ok(())
-            } else {
-                Err(format!("Expected verification error, got {:?}", err))
-            }
+        .map(|err| match err {
+            MultiproverError::Mpc(MpcError::AuthenticationError) => Ok(()),
+            _ => Err(err.to_string()),
         })
-        .unwrap_or(Err("Expected verification error, got Ok".to_string()))
+        .unwrap_or(Err(
+            "expected authentication error, but proof opened correctly".to_string(),
+        ))
 }
 
 /// A shuffle proof proves that `x` is a permutation of `y`
@@ -460,7 +460,7 @@ impl<'a> ShuffleProof {
         // Commit to the inputs
         let (x_commit, x_vars) = prover
             .batch_commit(
-                0, /* owning_party */
+                PARTY0,
                 x.iter().copied(),
                 &(0..x.len()).map(|_| Scalar::random(&mut rng)).collect_vec(),
             )
@@ -468,7 +468,7 @@ impl<'a> ShuffleProof {
 
         let (y_commit, y_vars) = prover
             .batch_commit(
-                1, /* owning_party */
+                PARTY1,
                 y.iter().copied(),
                 &(0..y.len()).map(|_| Scalar::random(&mut rng)).collect_vec(),
             )

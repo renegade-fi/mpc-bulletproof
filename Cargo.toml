@@ -22,7 +22,7 @@ ark-ec = "0.4"
 ark-ff = "0.4"
 ark-serialize = "0.4"
 futures = "0.3"
-mpc-stark = { path = "./mpc-stark" } #{ git = "https://github.com/renegade-fi/mpc-stark", branch = "joey/v2" }
+mpc-stark = { git = "https://github.com/renegade-fi/mpc-stark" }
 sha3 = { version = "0.8", default-features = false }
 digest = { version = "0.8", default-features = false }
 rand_core = { version = "0.5", default-features = false, features = ["alloc"] }
