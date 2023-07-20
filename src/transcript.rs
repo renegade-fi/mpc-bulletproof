@@ -3,7 +3,7 @@
 use std::sync::Arc;
 use std::sync::Mutex;
 
-use merlin::{keccak256, HashChainTranscript};
+use merlin::{pad_label, HashChainTranscript};
 use mpc_stark::algebra::scalar::ScalarResult;
 use mpc_stark::algebra::stark_curve::StarkPointResult;
 use mpc_stark::algebra::{scalar::Scalar, stark_curve::StarkPoint};
@@ -56,29 +56,26 @@ pub trait TranscriptProtocol {
 
 impl TranscriptProtocol for HashChainTranscript {
     fn rangeproof_domain_sep(&mut self, n: u64, m: u64) {
-        self.append_message(
-            b"dom-sep",
-            &HashChainTranscript::pad_label(b"rangeproof v1"),
-        );
+        self.append_message(b"dom-sep", &pad_label(b"rangeproof v1"));
         self.append_u64(b"n", n);
         self.append_u64(b"m", m);
     }
 
     fn innerproduct_domain_sep(&mut self, n: u64) {
-        self.append_message(b"dom-sep", &HashChainTranscript::pad_label(b"ipp v1"));
+        self.append_message(b"dom-sep", &pad_label(b"ipp v1"));
         self.append_u64(b"n", n);
     }
 
     fn r1cs_domain_sep(&mut self) {
-        self.append_message(b"dom-sep", &HashChainTranscript::pad_label(b"r1cs v1"));
+        self.append_message(b"dom-sep", &pad_label(b"r1cs v1"));
     }
 
     fn r1cs_1phase_domain_sep(&mut self) {
-        self.append_message(b"dom-sep", &HashChainTranscript::pad_label(b"r1cs-1phase"));
+        self.append_message(b"dom-sep", &pad_label(b"r1cs-1phase"));
     }
 
     fn r1cs_2phase_domain_sep(&mut self) {
-        self.append_message(b"dom-sep", &HashChainTranscript::pad_label(b"r1cs-2phase"));
+        self.append_message(b"dom-sep", &pad_label(b"r1cs-2phase"));
     }
 
     fn append_scalar(&mut self, label: &'static [u8], scalar: &Scalar) {
@@ -110,23 +107,10 @@ impl TranscriptProtocol for HashChainTranscript {
     }
 
     fn challenge_scalar(&mut self, label: &'static [u8]) -> Scalar {
-        let mut low_u256 = [0u8; 32];
+        let mut low_u256 = [0u8; STARK_POINT_BYTES];
         self.challenge_bytes(label, &mut low_u256);
 
-        // Need to chain another hash to get extra challenge bytes
-        let mut high_u256 = [0u8; 32];
-        keccak256(&low_u256, &mut high_u256);
-
-        // Reverse the challenge bytes so they are interpreted in big-endian order,
-        // matching the Cairo implementation
-        let challenge_be: Vec<u8> = low_u256
-            .iter()
-            .chain(high_u256.iter())
-            .rev()
-            .cloned()
-            .collect();
-
-        Scalar::from_be_bytes_mod_order(&challenge_be)
+        Scalar::from_uniform_bytes(low_u256)
     }
 }
 
