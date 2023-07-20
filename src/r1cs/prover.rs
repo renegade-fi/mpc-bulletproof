@@ -433,17 +433,15 @@ impl<'t, 'g> Prover<'t, 'g> {
         // protect the v's in the commitments), we don't gain much by
         // committing the v's as well as the v_blinding's.
         let mut rng = {
-            // let mut builder = self.transcript.build_rng();
+            let mut builder = self.transcript.build_rng();
 
-            // // Commit the blinding factors for the input wires
-            // for v_b in &self.v_blinding {
-            //     builder = builder.rekey_with_witness_bytes(b"v_blinding", &v_b.to_bytes_be());
-            // }
+            // Commit the blinding factors for the input wires
+            for v_b in &self.v_blinding {
+                builder = builder.rekey_with_witness_bytes(b"v_blinding", &v_b.to_bytes_be());
+            }
 
-            // use rand::thread_rng;
-            // builder.finalize(&mut thread_rng())
             use rand::thread_rng;
-            thread_rng()
+            builder.finalize(&mut thread_rng())
         };
 
         // Commit to the first-phase low-level witness variables.

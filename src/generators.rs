@@ -7,15 +7,14 @@
 extern crate alloc;
 
 use alloc::vec::Vec;
-use digest::{ExtendableOutput, Input, XofReader};
+use merlin::{keccak256, pad_label};
 use mpc_stark::algebra::authenticated_scalar::AuthenticatedScalarResult;
 use mpc_stark::algebra::authenticated_stark_point::AuthenticatedStarkPointResult;
 use mpc_stark::algebra::scalar::Scalar;
 use mpc_stark::algebra::scalar::ScalarResult;
 use mpc_stark::algebra::stark_curve::StarkPoint;
 use mpc_stark::algebra::stark_curve::StarkPointResult;
-use mpc_stark::algebra::stark_curve::STARK_UNIFORM_BYTES;
-use sha3::{Sha3XofReader, Shake256};
+use mpc_stark::algebra::stark_curve::STARK_POINT_BYTES;
 
 /// Represents a pair of base points for Pedersen commitments.
 ///
@@ -74,27 +73,27 @@ impl Default for PedersenGens {
 /// orthogonal generators.  The sequence can be deterministically
 /// produced starting with an arbitrary point.
 struct GeneratorsChain {
-    reader: Sha3XofReader,
+    state: [u8; 32],
 }
 
 impl GeneratorsChain {
     /// Creates a chain of generators, determined by the hash of `label`.
     fn new(label: &[u8]) -> Self {
-        let mut shake = Shake256::default();
-        shake.input(b"GeneratorsChain");
-        shake.input(label);
+        let mut state = [0_u8; 32];
+        let input = pad_label([b"GeneratorsChain", label].concat().as_slice());
 
-        GeneratorsChain {
-            reader: shake.xof_result(),
-        }
+        keccak256(&input, &mut state);
+
+        GeneratorsChain { state }
     }
 
     /// Advances the reader n times, squeezing and discarding
     /// the result.
     fn fast_forward(mut self, n: usize) -> Self {
         for _ in 0..n {
-            let mut buf = [0u8; STARK_UNIFORM_BYTES];
-            self.reader.read(&mut buf);
+            let mut state = [0_u8; 32];
+            keccak256(&self.state, &mut state);
+            self.state = state;
         }
         self
     }
@@ -110,17 +109,17 @@ impl Iterator for GeneratorsChain {
     type Item = StarkPoint;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let mut uniform_bytes = [0u8; STARK_UNIFORM_BYTES];
-        self.reader.read(&mut uniform_bytes);
+        let mut low_u256 = [0u8; STARK_POINT_BYTES];
+        keccak256(&self.state, &mut low_u256);
+        self.state.copy_from_slice(&low_u256);
 
-        // TODO: The inputs to the hash-to-curve algorithm here are public, so we may be able to
-        // optimize this by providing a hash-to-curve method that fails to hide the input
+        // Samples a uniformly random point on the curve in a manner that is consistent with the
+        // Cairo implementation. Namely, convert the uniform bytes to a scalar field element, and
+        // multiply by the generator point.
+        // Examples of other such hash-to-curve schemes that do not hide the scalar multiple:
         // https://eprint.iacr.org/2009/226.pdf and https://link.springer.com/chapter/10.1007/978-3-642-14623-7_13
-        // provide examples of such schemes
-        Some(
-            StarkPoint::from_uniform_bytes(uniform_bytes)
-                .expect("error deserializing point from random bytes"),
-        )
+        let scalar = Scalar::from_uniform_bytes(low_u256);
+        Some(scalar * StarkPoint::generator())
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
