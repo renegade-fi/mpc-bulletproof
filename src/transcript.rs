@@ -6,12 +6,18 @@ use std::sync::Mutex;
 use merlin::{pad_label, HashChainTranscript};
 use mpc_stark::algebra::scalar::ScalarResult;
 use mpc_stark::algebra::stark_curve::StarkPointResult;
-use mpc_stark::algebra::{scalar::Scalar, stark_curve::StarkPoint};
+use mpc_stark::algebra::{
+    scalar::Scalar,
+    stark_curve::{StarkPoint, STARK_POINT_BYTES},
+};
 use mpc_stark::MpcFabric;
 use mpc_stark::ResultId;
 use mpc_stark::ResultValue;
 
-use crate::errors::ProofError;
+use crate::{
+    errors::ProofError,
+    util::{hash_to_scalar, stark_point_to_transcript_bytes},
+};
 
 /// The error thrown by `expect`s on the MPC transcript's lock
 const ERR_LOCK_POISONED: &str = "transcript lock poisoned";
@@ -86,7 +92,7 @@ impl TranscriptProtocol for HashChainTranscript {
     }
 
     fn append_point(&mut self, label: &'static [u8], point: &StarkPoint) {
-        let buf = point.to_transcript_bytes();
+        let buf = stark_point_to_transcript_bytes(point);
         self.append_message(label, &buf);
     }
 
@@ -100,7 +106,7 @@ impl TranscriptProtocol for HashChainTranscript {
         if point == &StarkPoint::identity() {
             Err(ProofError::VerificationError)
         } else {
-            let buf = point.to_transcript_bytes();
+            let buf = stark_point_to_transcript_bytes(point);
             self.append_message(label, &buf);
             Ok(())
         }
@@ -110,7 +116,7 @@ impl TranscriptProtocol for HashChainTranscript {
         let mut low_u256 = [0u8; STARK_POINT_BYTES];
         self.challenge_bytes(label, &mut low_u256);
 
-        Scalar::from_uniform_bytes(low_u256)
+        hash_to_scalar(low_u256)
     }
 }
 
