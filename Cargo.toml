@@ -19,7 +19,7 @@ edition = "2021"
 
 [dependencies]
 curve25519-dalek = { version = "2", default-features = false, features = ["u64_backend", "nightly", "serde", "alloc"] }
-mpc-ristretto = { git = "https://github.com/renegade-fi/MPC-Ristretto" }
+mpc-ristretto = "0.1"
 subtle = { version = "2", default-features = false }
 sha3 = { version = "0.8", default-features = false }
 digest = { version = "0.8", default-features = false }
