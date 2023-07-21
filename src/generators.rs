@@ -14,9 +14,8 @@ use mpc_stark::algebra::scalar::Scalar;
 use mpc_stark::algebra::scalar::ScalarResult;
 use mpc_stark::algebra::stark_curve::StarkPoint;
 use mpc_stark::algebra::stark_curve::StarkPointResult;
-use mpc_stark::algebra::stark_curve::STARK_POINT_BYTES;
 
-use crate::util::hash_to_scalar;
+use crate::util::{hash_to_scalar, KECCAK_OUTPUT_SIZE};
 
 /// Represents a pair of base points for Pedersen commitments.
 ///
@@ -75,13 +74,13 @@ impl Default for PedersenGens {
 /// orthogonal generators.  The sequence can be deterministically
 /// produced starting with an arbitrary point.
 struct GeneratorsChain {
-    state: [u8; 32],
+    state: [u8; KECCAK_OUTPUT_SIZE],
 }
 
 impl GeneratorsChain {
     /// Creates a chain of generators, determined by the hash of `label`.
     fn new(label: &[u8]) -> Self {
-        let mut state = [0_u8; 32];
+        let mut state = [0_u8; KECCAK_OUTPUT_SIZE];
         let input = pad_label([b"GeneratorsChain", label].concat().as_slice());
 
         keccak256(&input, &mut state);
@@ -93,7 +92,7 @@ impl GeneratorsChain {
     /// the result.
     fn fast_forward(mut self, n: usize) -> Self {
         for _ in 0..n {
-            let mut state = [0_u8; 32];
+            let mut state = [0_u8; KECCAK_OUTPUT_SIZE];
             keccak256(&self.state, &mut state);
             self.state = state;
         }
@@ -111,7 +110,7 @@ impl Iterator for GeneratorsChain {
     type Item = StarkPoint;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let mut low_u256 = [0u8; STARK_POINT_BYTES];
+        let mut low_u256 = [0u8; KECCAK_OUTPUT_SIZE];
         keccak256(&self.state, &mut low_u256);
         self.state.copy_from_slice(&low_u256);
 

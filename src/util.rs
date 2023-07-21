@@ -9,13 +9,15 @@ use merlin::keccak256;
 use mpc_stark::{
     algebra::{
         scalar::{Scalar, ScalarResult},
-        stark_curve::{StarkPoint, STARK_POINT_BYTES},
+        stark_curve::StarkPoint,
     },
     MpcFabric,
 };
-use std::mem::size_of;
 
 use crate::inner_product_proof::inner_product;
+
+pub const KECCAK_OUTPUT_SIZE: usize = 32;
+pub const BASE_FIELD_BYTES: usize = 32;
 
 /// Represents a degree-1 vector polynomial \\(\mathbf{a} + \mathbf{b} \cdot x\\).
 pub struct VecPoly1(pub Vec<Scalar>, pub Vec<Scalar>);
@@ -247,9 +249,9 @@ pub fn read_exact<const N: usize>(data: &[u8]) -> [u8; N] {
 /// consistent with the Cairo implementation. This achieves a uniform
 /// sampling across the scalar field.
 // TODO: Insert link to Cairo implementation
-pub fn hash_to_scalar(low_u256: [u8; STARK_POINT_BYTES]) -> Scalar {
+pub fn hash_to_scalar(low_u256: [u8; KECCAK_OUTPUT_SIZE]) -> Scalar {
     // Need to chain another hash to get extra hash bytes
-    let mut high_u256 = [0u8; STARK_POINT_BYTES];
+    let mut high_u256 = [0u8; KECCAK_OUTPUT_SIZE];
     keccak256(&low_u256, &mut high_u256);
 
     // Reverse the bytes so they match the Cairo implementation,
@@ -265,15 +267,16 @@ pub fn hash_to_scalar(low_u256: [u8; STARK_POINT_BYTES]) -> Scalar {
 }
 
 /// Serialize this point to a byte buffer in a way that is consistent
-/// with the Cairo serialization of EC points, such that it can be absorbed
-/// into a Fiat-Shamir transcript
+/// with the Cairo serialization of EC points (i.e., 2 felts representing
+/// the x & y affine coordinates), such that it can be absorbed into a
+/// Fiat-Shamir transcript
 // TODO: Insert link to Cairo implementation
 pub fn stark_point_to_transcript_bytes(point: &StarkPoint) -> Vec<u8> {
-    let mut out: Vec<u8> = Vec::with_capacity(size_of::<StarkPoint>());
+    let mut out: Vec<u8> = Vec::with_capacity(BASE_FIELD_BYTES * 2);
     if point.is_identity() {
         // Custom identity point serialization that matches the
         // Cairo implementation
-        out.extend(std::iter::repeat(0).take(64));
+        out.extend(std::iter::repeat(0).take(out.capacity()));
     } else {
         let aff = point.to_affine();
         let x_bytes = aff.x.into_bigint().to_bytes_le();
