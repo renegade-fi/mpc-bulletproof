@@ -16,6 +16,8 @@ use mpc_stark::algebra::stark_curve::StarkPoint;
 use mpc_stark::algebra::stark_curve::StarkPointResult;
 use mpc_stark::algebra::stark_curve::STARK_POINT_BYTES;
 
+use crate::util::hash_to_scalar;
+
 /// Represents a pair of base points for Pedersen commitments.
 ///
 /// The Bulletproofs implementation and API is designed to support
@@ -118,7 +120,7 @@ impl Iterator for GeneratorsChain {
         // multiply by the generator point.
         // Examples of other such hash-to-curve schemes that do not hide the scalar multiple:
         // https://eprint.iacr.org/2009/226.pdf and https://link.springer.com/chapter/10.1007/978-3-642-14623-7_13
-        let scalar = Scalar::from_uniform_bytes(low_u256);
+        let scalar = hash_to_scalar(low_u256);
         Some(scalar * StarkPoint::generator())
     }
 
