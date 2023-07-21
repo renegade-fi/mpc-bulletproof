@@ -503,8 +503,6 @@ impl<'t, 'g> Verifier<'t, 'g> {
         // Create a `TranscriptRng` from the transcript. The verifier
         // has no witness data to commit, so this just mixes external
         // randomness into the existing transcript.
-        // use rand::thread_rng;
-        // let mut rng = self.transcript.build_rng().finalize(&mut thread_rng());
         let r = self.transcript.challenge_scalar(b"r");
 
         let xx = x * x;

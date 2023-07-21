@@ -4,10 +4,16 @@ extern crate alloc;
 
 use alloc::vec;
 use alloc::vec::Vec;
+use ark_ff::{BigInteger, PrimeField};
+use merlin::keccak256;
 use mpc_stark::{
-    algebra::scalar::{Scalar, ScalarResult},
+    algebra::{
+        scalar::{Scalar, ScalarResult},
+        stark_curve::{StarkPoint, STARK_POINT_BYTES},
+    },
     MpcFabric,
 };
+use std::mem::size_of;
 
 use crate::inner_product_proof::inner_product;
 
@@ -235,6 +241,48 @@ pub fn read_exact<const N: usize>(data: &[u8]) -> [u8; N] {
     let mut buf32 = [0u8; N];
     buf32[..].copy_from_slice(&data[..N]);
     buf32
+}
+
+/// Convert a uniform 32-byte buffer to a `Scalar` in a manner that is
+/// consistent with the Cairo implementation. This achieves a uniform
+/// sampling across the scalar field.
+// TODO: Insert link to Cairo implementation
+pub fn hash_to_scalar(low_u256: [u8; STARK_POINT_BYTES]) -> Scalar {
+    // Need to chain another hash to get extra hash bytes
+    let mut high_u256 = [0u8; STARK_POINT_BYTES];
+    keccak256(&low_u256, &mut high_u256);
+
+    // Reverse the bytes so they match the Cairo implementation,
+    // where they're interpreted as big-endian u256s
+    let bytes_be: Vec<u8> = [low_u256, high_u256]
+        .concat()
+        .iter()
+        .rev()
+        .copied()
+        .collect();
+
+    Scalar::from_be_bytes_mod_order(&bytes_be)
+}
+
+/// Serialize this point to a byte buffer in a way that is consistent
+/// with the Cairo serialization of EC points, such that it can be absorbed
+/// into a Fiat-Shamir transcript
+// TODO: Insert link to Cairo implementation
+pub fn stark_point_to_transcript_bytes(point: &StarkPoint) -> Vec<u8> {
+    let mut out: Vec<u8> = Vec::with_capacity(size_of::<StarkPoint>());
+    if point.is_identity() {
+        // Custom identity point serialization that matches the
+        // Cairo implementation
+        out.extend(std::iter::repeat(0).take(64));
+    } else {
+        let aff = point.to_affine();
+        let x_bytes = aff.x.into_bigint().to_bytes_le();
+        let y_bytes = aff.y.into_bigint().to_bytes_le();
+        out.extend(x_bytes);
+        out.extend(y_bytes);
+    }
+
+    out
 }
 
 #[cfg(test)]
