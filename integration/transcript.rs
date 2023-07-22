@@ -1,7 +1,7 @@
 //! Groups tests for the synchronized MPC transcript
 
 use itertools::Itertools;
-use merlin::Transcript;
+use merlin::HashChainTranscript;
 use mpc_bulletproof::MpcTranscript;
 use mpc_stark::{algebra::scalar::Scalar, random_point, PARTY0, PARTY1};
 use rand::thread_rng;
@@ -37,7 +37,7 @@ fn test_add_scalars(test_args: &IntegrationTestArgs) -> Result<(), String> {
         .map(|s| s.value)
         .collect_vec();
 
-    let mut transcript = MpcTranscript::new(Transcript::new(b"test"), fabric.clone());
+    let mut transcript = MpcTranscript::new(HashChainTranscript::new(b"test"), fabric.clone());
     for scalar in opened_scalars.into_iter() {
         transcript.append_scalar(b"Scalar", &scalar);
     }
@@ -77,7 +77,7 @@ fn test_add_points(test_args: &IntegrationTestArgs) -> Result<(), String> {
         .map(|p| p.value)
         .collect_vec();
 
-    let mut transcript = MpcTranscript::new(Transcript::new(b"test"), fabric.clone());
+    let mut transcript = MpcTranscript::new(HashChainTranscript::new(b"test"), fabric.clone());
     for point in opened_points.into_iter() {
         transcript.append_point(b"Point", &point);
     }
