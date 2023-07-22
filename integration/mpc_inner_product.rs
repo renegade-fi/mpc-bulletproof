@@ -5,7 +5,7 @@ use std::iter;
 use digest::Digest;
 use futures::future::join_all;
 use itertools::Itertools;
-use merlin::Transcript;
+use merlin::HashChainTranscript;
 use mpc_bulletproof::r1cs_mpc::MultiproverError;
 use mpc_bulletproof::{r1cs_mpc::SharedInnerProductProof, util, BulletproofGens, MpcTranscript};
 use mpc_bulletproof::{InnerProductProof, ProofError};
@@ -53,7 +53,7 @@ fn generate_challenge_scalar(fabric: MpcFabric) -> ScalarResult {
 fn test_phrase_hash_to_curve() -> StarkPoint {
     let mut hasher = Sha3_512::new();
     hasher.input(TEST_PHRASE.as_bytes());
-    let out = hasher.result();
+    let out = hasher.result().to_vec();
 
     let scalar_out = Scalar::from_be_bytes_mod_order(&out);
     scalar_out * StarkPoint::generator()
@@ -120,7 +120,7 @@ fn prove(
     let Q = fabric.allocate_point(test_phrase_hash_to_curve());
 
     // Generate the inner product proof
-    let transcript = Transcript::new(TRANSCRIPT_SEED.as_bytes());
+    let transcript = HashChainTranscript::new(TRANSCRIPT_SEED.as_bytes());
     let mut mpc_transcript = MpcTranscript::new(transcript, fabric.clone());
     Ok((
         SharedInnerProductProof::create(
@@ -157,7 +157,7 @@ fn verify(
     let G_factors: Vec<Scalar> = iter::repeat(Scalar::one()).take(n).collect();
     let H_factors: Vec<Scalar> = util::exp_iter(y_inv).take(n).collect();
 
-    let mut verifier_transcript = Transcript::new(TRANSCRIPT_SEED.as_bytes());
+    let mut verifier_transcript = HashChainTranscript::new(TRANSCRIPT_SEED.as_bytes());
     proof.verify(
         n,
         &mut verifier_transcript,
