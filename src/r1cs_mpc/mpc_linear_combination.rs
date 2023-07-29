@@ -90,7 +90,7 @@ impl<'a> From<&'a MpcVariable> for MpcLinearCombination {
 
 impl From<ScalarResult> for MpcLinearCombination {
     fn from(s: ScalarResult) -> Self {
-        let fabric = s.clone_fabric();
+        let fabric = s.fabric().clone();
         MpcLinearCombination {
             terms: HashMap::from([(MpcVariable::one(fabric), s)]),
         }
@@ -99,7 +99,7 @@ impl From<ScalarResult> for MpcLinearCombination {
 
 impl From<&ScalarResult> for MpcLinearCombination {
     fn from(s: &ScalarResult) -> Self {
-        let fabric = s.clone_fabric();
+        let fabric = s.fabric().clone();
         MpcLinearCombination {
             terms: HashMap::from([(MpcVariable::one(fabric), s.clone())]),
         }
