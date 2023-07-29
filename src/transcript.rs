@@ -155,8 +155,7 @@ impl MpcTranscript {
         self.fabric
             .new_gate_op::<_, Scalar>(vec![self.latest_op_id], move |_args| {
                 let mut locked_transcript = transcript_ref.lock().expect(ERR_LOCK_POISONED);
-                locked_transcript.append_message(b"dom-sep", b"ipp v1");
-                locked_transcript.append_u64(b"n", n);
+                locked_transcript.innerproduct_domain_sep(n);
 
                 ResultValue::Scalar(Scalar::zero())
             });
@@ -168,7 +167,7 @@ impl MpcTranscript {
         self.fabric
             .new_gate_op::<_, Scalar>(vec![self.latest_op_id], move |_args| {
                 let mut locked_transcript = transcript_ref.lock().expect(ERR_LOCK_POISONED);
-                locked_transcript.append_message(b"dom-sep", b"r1cs v1");
+                locked_transcript.r1cs_domain_sep();
 
                 ResultValue::Scalar(Scalar::zero())
             });
@@ -180,7 +179,7 @@ impl MpcTranscript {
         self.fabric
             .new_gate_op::<_, Scalar>(vec![self.latest_op_id], move |_args| {
                 let mut locked_transcript = transcript_ref.lock().expect(ERR_LOCK_POISONED);
-                locked_transcript.append_message(b"dom-sep", b"r1cs-1phase");
+                locked_transcript.r1cs_1phase_domain_sep();
 
                 ResultValue::Scalar(Scalar::zero())
             });
