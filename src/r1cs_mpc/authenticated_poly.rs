@@ -296,7 +296,7 @@ mod tests {
 
         async fn receive_message(&mut self) -> Result<NetworkOutbound, MpcNetworkError> {
             Ok(NetworkOutbound {
-                op_id: 0,
+                result_id: 0,
                 payload: NetworkPayload::Scalar(Scalar::one()),
             })
         }
@@ -306,7 +306,7 @@ mod tests {
             _message: NetworkOutbound,
         ) -> Result<NetworkOutbound, MpcNetworkError> {
             Ok(NetworkOutbound {
-                op_id: 0,
+                result_id: 0,
                 payload: NetworkPayload::Scalar(Scalar::one()),
             })
         }

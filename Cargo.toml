@@ -5,18 +5,17 @@ name = "mpc-bulletproof"
 # - update html_root_url
 # - ensure yoloproofs was disabled in an atomic (revertable) commit
 # - update CHANGELOG
-version = "2.0.0"
+version = "0.1.0"
 authors = [
-    "Cathie Yun <cathieyun@gmail.com>",
-    "Henry de Valence <hdevalence@hdevalence.ca>",
-    "Oleg Andreev <oleganza@gmail.com>",
+    "Joey Kraut <joey@renegade.fi>",
+    "Andrew Kirillov <andrew@renegade.fi>",
 ]
 readme = "README.md"
 license = "MIT"
 repository = "https://github.com/renegade-fi/mpc-bulletproof"
 categories = ["cryptography"]
 keywords = ["cryptography", "crypto", "stark", "zero-knowledge", "bulletproofs"]
-description = "A pure-Rust implementation of collaboratively proved Bulletproofs using Ristretto"
+description = "A pure-Rust implementation of collaboratively proved Bulletproofs over the Stark curve."
 edition = "2021"
 
 [dependencies]

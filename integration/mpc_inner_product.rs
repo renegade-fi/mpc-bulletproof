@@ -298,9 +298,10 @@ fn test_random_inner_product(test_args: &IntegrationTestArgs) -> Result<(), Stri
     let mut rng = thread_rng();
     let index_assignment = (0..2 * n)
         .map(|_| rng.gen_range(0..2))
+        .map(|value| fabric.allocate_scalar(value))
         .map(|value| {
             if fabric.party_id() == PARTY0 {
-                fabric.send_scalar(value)
+                fabric.send_value(value)
             } else {
                 fabric.receive_value()
             }

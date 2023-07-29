@@ -9,6 +9,7 @@ use crate::{
     util, BulletproofGens, PedersenGens,
 };
 use futures::future::join_all;
+use itertools::Itertools;
 use merlin::HashChainTranscript as Transcript;
 use mpc_stark::{
     algebra::{
@@ -367,12 +368,11 @@ impl<'a, 't, 'g> MpcProver<'a, 't, 'g> {
     ) -> Result<(AuthenticatedStarkPointOpenResult, MpcVariable), MpcError> {
         // Allocate the value in the MPC network and then commit to the shared value
         let shared_v = self.fabric.share_scalar(v, owning_party);
-        self.commit_preshared(&shared_v, v_blinding)
+        let shared_blinder = self.fabric.allocate_preshared_scalar(v_blinding);
+        self.commit_preshared(&shared_v, &shared_blinder)
     }
 
     /// Commit to a batch of values
-    ///
-    /// TODO: Optimize this to use a single batched fabric operation
     pub fn batch_commit<I, T>(
         &mut self,
         owning_party: PartyId,
@@ -383,12 +383,16 @@ impl<'a, 't, 'g> MpcProver<'a, 't, 'g> {
         I: IntoIterator<Item = T>,
         T: Into<Scalar>,
     {
-        Ok(v.into_iter()
-            .zip(v_blinding.iter())
-            .map(|(v, v_blinding)| self.commit(owning_party, v, *v_blinding))
-            .collect::<Result<Vec<_>, _>>()?
-            .into_iter()
-            .unzip())
+        let v = v.into_iter().map(Into::into).collect_vec();
+        assert_eq!(v.len(), v_blinding.len());
+
+        // Share scalars with counterparty
+        let shared_v = self.fabric.batch_share_scalar(v, owning_party);
+        let shared_blinder = self
+            .fabric
+            .batch_allocate_preshared_scalar(v_blinding.to_vec());
+
+        self.batch_commit_preshared(&shared_v, &shared_blinder)
     }
 
     /// Commit to a pre-shared value
@@ -399,21 +403,56 @@ impl<'a, 't, 'g> MpcProver<'a, 't, 'g> {
     pub fn commit_preshared(
         &mut self,
         v: &AuthenticatedScalarResult,
-        v_blinding: Scalar,
+        v_blinding: &AuthenticatedScalarResult,
     ) -> Result<(AuthenticatedStarkPointOpenResult, MpcVariable), MpcError> {
         // Commit to the input, open the commitment, and add the commitment to the transcript.
-        let blinder = self.fabric.allocate_preshared_scalar(v_blinding);
-        let value_commit = self.pc_gens.commit_shared(v, &blinder).open_authenticated();
+        let value_commit = self
+            .pc_gens
+            .commit_shared(v, v_blinding)
+            .open_authenticated();
         self.transcript.append_point(b"V", &value_commit.value);
 
         // Add the value to the constraint system
         let i = self.v.len();
         self.v.push(v.clone());
-        self.v_blinding.push(blinder);
+        self.v_blinding.push(v_blinding.clone());
 
         Ok((
             value_commit,
             MpcVariable::new_with_type(Variable::Committed(i), self.fabric.clone()),
+        ))
+    }
+
+    /// Commit to a batch of pre-shared values
+    pub fn batch_commit_preshared(
+        &mut self,
+        v: &[AuthenticatedScalarResult],
+        v_blinding: &[AuthenticatedScalarResult],
+    ) -> Result<(Vec<AuthenticatedStarkPointOpenResult>, Vec<MpcVariable>), MpcError> {
+        assert_eq!(v.len(), v_blinding.len());
+        let n = v.len();
+
+        // Open the blinders
+        let commitments = v
+            .iter()
+            .zip(v_blinding.iter())
+            .map(|(value, blinder)| self.pc_gens.commit_shared(value, blinder))
+            .collect_vec();
+        let open_comms = AuthenticatedStarkPointResult::open_authenticated_batch(&commitments);
+
+        open_comms
+            .iter()
+            .for_each(|blinder| self.transcript.append_point(b"V", &blinder.value));
+
+        let i = self.v.len();
+        self.v.append(&mut v.to_vec());
+        self.v_blinding.append(&mut v_blinding.to_vec());
+
+        Ok((
+            open_comms,
+            (i..i + n)
+                .map(|i| MpcVariable::new_with_type(Variable::Committed(i), self.fabric.clone()))
+                .collect(),
         ))
     }
 
