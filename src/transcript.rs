@@ -191,7 +191,7 @@ impl MpcTranscript {
         self.fabric
             .new_gate_op::<_, Scalar>(vec![self.latest_op_id], move |_args| {
                 let mut locked_transcript = transcript_ref.lock().expect(ERR_LOCK_POISONED);
-                locked_transcript.append_message(b"dom-sep", b"r1cs-2phase");
+                locked_transcript.r1cs_2phase_domain_sep();
 
                 ResultValue::Scalar(Scalar::zero())
             });
