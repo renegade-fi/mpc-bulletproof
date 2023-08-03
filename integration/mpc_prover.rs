@@ -26,7 +26,9 @@ use mpc_stark::{
 use rand::rngs::OsRng;
 use tokio::runtime::Handle;
 
-use crate::{mpc_inner_product::TRANSCRIPT_SEED, IntegrationTest, IntegrationTestArgs};
+use crate::{
+    helpers::await_result, mpc_inner_product::TRANSCRIPT_SEED, IntegrationTest, IntegrationTestArgs,
+};
 
 /// A helper macro to await a vector of results by blocking the runtime
 macro_rules! await_vec {
@@ -147,7 +149,7 @@ impl<'a> SimpleCircuit {
             BulletproofGens::new(1024 /* gens_capacity */, 1 /* party_capacity */);
 
         // Open the proof and the commitments
-        let opened_proof = proof.open()?;
+        let opened_proof = await_result(proof.open())?;
         let opened_a_comms: Vec<StarkPoint> = await_vec!(a_commit)
             .into_iter()
             .collect::<Result<Vec<_>, _>>()
@@ -273,11 +275,13 @@ fn test_r1cs_interleaved_witness(test_args: &IntegrationTestArgs) -> Result<(), 
     )
     .map_err(|err| format!("Error building constraints: {:?}", err))?;
 
-    let proof = prover
-        .prove(&bp_gens)
-        .map_err(|err| format!("Error proving: {:?}", err))?
-        .open()
-        .map_err(|err| format!("Error opening proof: {:?}", err))?;
+    let proof = await_result(
+        prover
+            .prove(&bp_gens)
+            .map_err(|err| format!("Error proving: {:?}", err))?
+            .open(),
+    )
+    .map_err(|err| format!("Error opening proof: {:?}", err))?;
 
     // Build a verifier
     let mut verifier_transcript = Transcript::new(TRANSCRIPT_SEED.as_bytes());
@@ -346,8 +350,7 @@ fn test_r1cs_proof_malleability(test_args: &IntegrationTestArgs) -> Result<(), S
     }
 
     // Verify that opening the proof fails
-    proof
-        .open()
+    await_result(proof.open())
         .err()
         .map(|err| match err {
             MultiproverError::Mpc(MpcError::AuthenticationError) => Ok(()),
@@ -496,7 +499,7 @@ impl<'a> ShuffleProof {
             BulletproofGens::new(1024 /* gens_capacity */, 1 /* party_capacity */);
 
         // Open the proof and the commitments
-        let opened_proof = proof.open()?;
+        let opened_proof = await_result(proof.open())?;
         let opened_x = await_vec!(x_commit)
             .into_iter()
             .collect::<Result<Vec<_>, _>>()
