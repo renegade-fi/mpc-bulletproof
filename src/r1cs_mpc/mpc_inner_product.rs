@@ -14,7 +14,6 @@ use mpc_stark::algebra::scalar::{Scalar, ScalarResult};
 use mpc_stark::algebra::stark_curve::{StarkPoint, StarkPointResult};
 use mpc_stark::error::MpcError;
 use mpc_stark::MpcFabric;
-use tokio::runtime::Handle;
 
 use core::iter;
 
@@ -243,27 +242,31 @@ impl SharedInnerProductProof {
     /// the set of additive shares
     ///
     /// The resulting type is `InnerProductProof` as the values are no longer secret shared
-    pub fn open(&self) -> Result<InnerProductProof, MultiproverError> {
-        // Block on the results of the openings
-        macro_rules! await_res {
-            ($x:expr) => {
-                Handle::current().block_on($x)
-            };
-        }
-
+    pub async fn open(&self) -> Result<InnerProductProof, MultiproverError> {
         // Open the scalars (a, b)
         // The Ristretto points are already opened as a result of running the protocol
-        let a = await_res!(self.a.open_authenticated()).map_err(MultiproverError::Mpc)?;
-        let b = await_res!(self.b.open_authenticated()).map_err(MultiproverError::Mpc)?;
+        let a = self
+            .a
+            .open_authenticated()
+            .await
+            .map_err(MultiproverError::Mpc)?;
+        let b = self
+            .b
+            .open_authenticated()
+            .await
+            .map_err(MultiproverError::Mpc)?;
 
-        let L_vec = await_res!(join_all(self.L_vec.iter().cloned()))
+        let L_vec = join_all(self.L_vec.iter().cloned())
+            .await
             .into_iter()
             .collect::<Result<Vec<_>, MpcError>>()
             .map_err(MultiproverError::Mpc)?;
-        let R_vec = await_res!(join_all(self.R_vec.iter().cloned()))
+        let R_vec = join_all(self.R_vec.iter().cloned())
+            .await
             .into_iter()
             .collect::<Result<Vec<_>, MpcError>>()
             .map_err(MultiproverError::Mpc)?;
+
         Ok(InnerProductProof { L_vec, R_vec, a, b })
     }
 }

@@ -3,7 +3,6 @@
 
 use mpc_stark::algebra::scalar::ScalarResult;
 use mpc_stark::algebra::stark_curve::StarkPointResult;
-use tokio::runtime::Handle;
 
 use crate::errors::MultiproverError;
 use crate::r1cs::R1CSProof;
@@ -57,33 +56,27 @@ pub struct PartiallySharedR1CSProof {
 
 impl PartiallySharedR1CSProof {
     /// Opens the proof, generating a standard R1CS Proof
-    pub fn open(&self) -> Result<R1CSProof, MultiproverError> {
+    pub async fn open(&self) -> Result<R1CSProof, MultiproverError> {
         // To open, only the inner product proof must be opened
         // Every other value is opened during the course of proof generation to maintain
         // a consistent Merlin transcript
-        let ipp_open = self.ipp_proof.open()?;
-
-        macro_rules! await_res {
-            ($res:expr) => {
-                Handle::current().block_on($res)
-            };
-        }
+        let ipp_open = self.ipp_proof.open().await?;
 
         Ok(R1CSProof {
-            A_I1: await_res!(self.A_I1.clone()),
-            A_O1: await_res!(self.A_O1.clone()),
-            S1: await_res!(self.S1.clone()),
-            A_I2: await_res!(self.A_I2.clone()),
-            A_O2: await_res!(self.A_O2.clone()),
-            S2: await_res!(self.S2.clone()),
-            T_1: await_res!(self.T_1.clone()),
-            T_3: await_res!(self.T_3.clone()),
-            T_4: await_res!(self.T_4.clone()),
-            T_5: await_res!(self.T_5.clone()),
-            T_6: await_res!(self.T_6.clone()),
-            t_x: await_res!(self.t_x.clone()),
-            t_x_blinding: await_res!(self.t_x_blinding.clone()),
-            e_blinding: await_res!(self.e_blinding.clone()),
+            A_I1: self.A_I1.clone().await,
+            A_O1: self.A_O1.clone().await,
+            S1: self.S1.clone().await,
+            A_I2: self.A_I2.clone().await,
+            A_O2: self.A_O2.clone().await,
+            S2: self.S2.clone().await,
+            T_1: self.T_1.clone().await,
+            T_3: self.T_3.clone().await,
+            T_4: self.T_4.clone().await,
+            T_5: self.T_5.clone().await,
+            T_6: self.T_6.clone().await,
+            t_x: self.t_x.clone().await,
+            t_x_blinding: self.t_x_blinding.clone().await,
+            e_blinding: self.e_blinding.clone().await,
             ipp_proof: ipp_open,
         })
     }

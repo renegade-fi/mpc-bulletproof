@@ -23,6 +23,7 @@ use rand::{rngs::OsRng, thread_rng, Rng, RngCore};
 use sha3::Sha3_512;
 use tokio::runtime::Handle;
 
+use crate::helpers::await_result;
 use crate::{IntegrationTest, IntegrationTestArgs};
 
 // -------------
@@ -189,9 +190,8 @@ fn prove_and_verify(
     let y_inv = Handle::current().block_on(y_inv);
 
     // Open the proof and input commitment
-    let proof_opened = proof
-        .open()
-        .map_err(|err| format!("error opening proof: {err:?}"))?;
+    let proof_opened =
+        await_result(proof.open()).map_err(|err| format!("error opening proof: {err:?}"))?;
     let comm_opened = Handle::current()
         .block_on(input_comm.open_authenticated())
         .map_err(|err| format!("error opening input comm: {err:?}"))?;
@@ -406,8 +406,7 @@ fn test_malleable_proof(test_args: &IntegrationTestArgs) -> Result<(), String> {
     }
 
     // Open and ensure that verification fails
-    proof
-        .open()
+    await_result(proof.open())
         .err()
         .map(|err| match err {
             MultiproverError::Mpc(MpcError::AuthenticationError) => Ok(()),
