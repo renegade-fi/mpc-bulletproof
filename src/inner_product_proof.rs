@@ -16,10 +16,10 @@ use crate::transcript::TranscriptProtocol;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct InnerProductProof {
-    pub(crate) L_vec: Vec<StarkPoint>,
-    pub(crate) R_vec: Vec<StarkPoint>,
-    pub(crate) a: Scalar,
-    pub(crate) b: Scalar,
+    pub L_vec: Vec<StarkPoint>,
+    pub R_vec: Vec<StarkPoint>,
+    pub a: Scalar,
+    pub b: Scalar,
 }
 
 #[allow(clippy::too_many_arguments)]
