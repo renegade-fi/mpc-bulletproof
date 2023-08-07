@@ -236,14 +236,7 @@ pub fn read32(data: &[u8]) -> [u8; 32] {
 
 #[cfg(test)]
 mod tests {
-    use async_trait::async_trait;
-    use mpc_stark::{
-        algebra::scalar::Scalar,
-        beaver::SharedValueSource,
-        error::MpcNetworkError,
-        network::{MpcNetwork, NetworkOutbound, NetworkPayload, PartyId},
-        PARTY0,
-    };
+    use mpc_stark::{algebra::scalar::Scalar, beaver::SharedValueSource};
 
     use crate::inner_product_proof::inner_product;
 
@@ -272,47 +265,6 @@ mod tests {
 
         fn next_triplet(&mut self) -> (Scalar, Scalar, Scalar) {
             (Scalar::one(), Scalar::one(), Scalar::one())
-        }
-    }
-
-    /// Mock MPC Network
-    #[derive(Clone, Debug)]
-    pub struct DummyMpcNetwork;
-    impl DummyMpcNetwork {
-        fn new() -> Self {
-            Self
-        }
-    }
-
-    #[async_trait]
-    impl MpcNetwork for DummyMpcNetwork {
-        fn party_id(&self) -> PartyId {
-            PARTY0
-        }
-
-        async fn send_message(&mut self, _message: NetworkOutbound) -> Result<(), MpcNetworkError> {
-            Ok(())
-        }
-
-        async fn receive_message(&mut self) -> Result<NetworkOutbound, MpcNetworkError> {
-            Ok(NetworkOutbound {
-                result_id: 0,
-                payload: NetworkPayload::Scalar(Scalar::one()),
-            })
-        }
-
-        async fn exchange_messages(
-            &mut self,
-            _message: NetworkOutbound,
-        ) -> Result<NetworkOutbound, MpcNetworkError> {
-            Ok(NetworkOutbound {
-                result_id: 0,
-                payload: NetworkPayload::Scalar(Scalar::one()),
-            })
-        }
-
-        async fn close(&mut self) -> Result<(), MpcNetworkError> {
-            Ok(())
         }
     }
 

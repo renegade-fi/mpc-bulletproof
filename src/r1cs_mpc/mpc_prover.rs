@@ -8,7 +8,7 @@ use crate::{
     transcript::MpcTranscript,
     util, BulletproofGens, PedersenGens,
 };
-use futures::future::join_all;
+use futures_util::future::join_all;
 use itertools::Itertools;
 use merlin::HashChainTranscript as Transcript;
 use mpc_stark::{
@@ -25,7 +25,6 @@ use mpc_stark::{
     network::{PartyId, QuicTwoPartyNet},
     MpcFabric,
 };
-use tokio::runtime::Handle;
 
 use super::{
     authenticated_poly::{AuthenticatedPoly6, AuthenticatedVecPoly3},
@@ -554,7 +553,7 @@ impl<'a, 't, 'g> MpcProver<'a, 't, 'g> {
     }
 
     /// Checks whether all the constraints are satisfied, does not prove the statement
-    pub fn constraints_satisfied(&self) -> Result<bool, MultiproverError> {
+    pub async fn constraints_satisfied(&self) -> bool {
         let mut evals = Vec::with_capacity(self.constraints.len());
         for constraint in self.constraints.iter() {
             evals.push(self.eval_lc(constraint));
@@ -562,9 +561,10 @@ impl<'a, 't, 'g> MpcProver<'a, 't, 'g> {
 
         // Check that all the constraints are satisfied
         let open_results = AuthenticatedScalarResult::open_batch(&evals);
-        let evals_open = Handle::current().block_on(join_all(open_results.into_iter()));
-
-        Ok(evals_open.iter().all(|eval| *eval == Scalar::zero()))
+        join_all(open_results)
+            .await
+            .into_iter()
+            .all(|res| res == Scalar::zero())
     }
 
     /// Consume this `ConstraintSystem` and produce a shared proof
