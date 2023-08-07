@@ -41,9 +41,9 @@ macro_rules! await_vec {
 /// Result is `c`
 struct SimpleCircuit;
 
-impl<'a> SimpleCircuit {
+impl SimpleCircuit {
     /// Gadget that applies constraints to the constraint system
-    fn gadget<CS: MpcRandomizableConstraintSystem<'a>>(
+    fn gadget<CS: MpcRandomizableConstraintSystem>(
         cs: &mut CS,
         a: Vec<MpcVariable>,
         b: Vec<MpcVariable>,
@@ -81,9 +81,7 @@ impl<'a> SimpleCircuit {
 
     /// Create a bulletproof fo the statement specified by `gadget`
     #[allow(clippy::type_complexity)]
-    pub fn prove<'b>(
-        pc_gens: &'b PedersenGens,
-        bp_gens: &'b BulletproofGens,
+    pub fn prove(
         a: &[Scalar],
         b: &[Scalar],
         expected_out: Scalar,
@@ -104,6 +102,7 @@ impl<'a> SimpleCircuit {
         let mut rng = OsRng {};
 
         // Create the proof system
+        let pc_gens = PedersenGens::default();
         let prover_transcript = Transcript::new(TRANSCRIPT_SEED.as_bytes());
         let mut prover = MpcProver::new_with_fabric(mpc_fabric, prover_transcript, pc_gens);
 
@@ -130,8 +129,11 @@ impl<'a> SimpleCircuit {
         // Apply the gadget to generate the constraints, then prove
         Self::gadget(&mut prover, a_vars, b_vars, c_var)
             .map_err(|err| format!("Error building constraints: {:?}", err))?;
+
+        let bp_gens =
+            BulletproofGens::new(1024 /* gens_capacity */, 1 /* party_capacity */);
         let proof = prover
-            .prove(bp_gens)
+            .prove(&bp_gens)
             .map_err(|err| format!("Error proving: {:?}", err))?;
 
         Ok((proof, a_commit, b_commit, c_commit))
@@ -203,13 +205,7 @@ fn test_simple_r1cs(test_args: &IntegrationTestArgs) -> Result<(), String> {
     };
     let my_scalars: Vec<Scalar> = my_values.into_iter().map(Scalar::from).collect();
 
-    // Commit and share values
-    let pc_gens = PedersenGens::default();
-    let bp_gens = BulletproofGens::new(2, 1);
-
     let (proof, a_commit, b_commit, c_commit) = SimpleCircuit::prove(
-        &pc_gens,
-        &bp_gens,
         &my_scalars,
         &my_scalars,
         Scalar::from(920u64), // Expected value of the statement defined by the gadget
@@ -240,7 +236,7 @@ fn test_r1cs_interleaved_witness(test_args: &IntegrationTestArgs) -> Result<(), 
     // Create the proof system
     let prover_transcript = Transcript::new(TRANSCRIPT_SEED.as_bytes());
     let mut prover =
-        MpcProver::new_with_fabric(test_args.mpc_fabric.clone(), prover_transcript, &pc_gens);
+        MpcProver::new_with_fabric(test_args.mpc_fabric.clone(), prover_transcript, pc_gens);
 
     let (party0_commit, party0_vars) = prover
         .batch_commit(
@@ -328,13 +324,7 @@ fn test_r1cs_proof_malleability(test_args: &IntegrationTestArgs) -> Result<(), S
     };
     let my_scalars: Vec<Scalar> = my_values.into_iter().map(Scalar::from).collect();
 
-    // Commit and share values
-    let pc_gens = PedersenGens::default();
-    let bp_gens = BulletproofGens::new(2, 1);
-
     let (mut proof, _, _, _) = SimpleCircuit::prove(
-        &pc_gens,
-        &bp_gens,
         &my_scalars,
         &my_scalars,
         Scalar::from(920u64), // Expected value of the statement defined by the gadget
@@ -364,9 +354,9 @@ fn test_r1cs_proof_malleability(test_args: &IntegrationTestArgs) -> Result<(), S
 /// A shuffle proof proves that `x` is a permutation of `y`
 pub struct ShuffleProof;
 
-impl<'a> ShuffleProof {
-    fn gadget<'b, CS: MpcRandomizableConstraintSystem<'a>>(
-        cs: &'b mut CS,
+impl ShuffleProof {
+    fn gadget<CS: MpcRandomizableConstraintSystem>(
+        cs: &mut CS,
         x: Vec<MpcVariable>,
         y: Vec<MpcVariable>,
     ) -> Result<(), String> {
@@ -440,8 +430,6 @@ impl<'a> ShuffleProof {
     pub(crate) fn prove(
         x: &[Scalar],
         y: &[Scalar],
-        pc_gens: &PedersenGens,
-        bp_gens: &BulletproofGens,
         mpc_fabric: MpcFabric,
     ) -> Result<
         (
@@ -457,6 +445,7 @@ impl<'a> ShuffleProof {
         let mut rng = OsRng {};
 
         // Build the prover
+        let pc_gens = PedersenGens::default();
         let prover_transcript = Transcript::new(TRANSCRIPT_SEED.as_bytes());
         let mut prover = MpcProver::new_with_fabric(mpc_fabric, prover_transcript, pc_gens);
 
@@ -481,8 +470,10 @@ impl<'a> ShuffleProof {
         Self::gadget(&mut prover, x_vars, y_vars)
             .map_err(|err| format!("Error specifying constraints: {:?}", err))?;
 
+        let bp_gens =
+            BulletproofGens::new(1024 /* gens_capacity */, 1 /* party_capacity */);
         let proof = prover
-            .prove(bp_gens)
+            .prove(&bp_gens)
             .map_err(|err| format!("Error proving: {:?}", err))?;
 
         Ok((proof, x_commit, y_commit))
@@ -537,20 +528,8 @@ fn test_shuffle_proof(test_args: &IntegrationTestArgs) -> Result<(), String> {
     };
     let my_scalars = my_values.into_iter().map(Scalar::from).collect_vec();
 
-    // Setup
-    let pc_gens = PedersenGens::default();
-    let bp_gens = BulletproofGens::new(
-        2 * k as usize, /* gens_capacity */
-        1,              /* party_capacity */
-    );
-
-    let (proof, x_commit, y_commit) = ShuffleProof::prove(
-        &my_scalars,
-        &my_scalars,
-        &pc_gens,
-        &bp_gens,
-        test_args.mpc_fabric.clone(),
-    )?;
+    let (proof, x_commit, y_commit) =
+        ShuffleProof::prove(&my_scalars, &my_scalars, test_args.mpc_fabric.clone())?;
 
     ShuffleProof::verify(proof, x_commit, y_commit)
         .map_err(|err| format!("Verification error: {err:?}"))
@@ -562,20 +541,8 @@ fn test_false_shuffle(test_args: &IntegrationTestArgs) -> Result<(), String> {
     let mut rng = OsRng {};
     let my_values = (0u64..k).map(|_| Scalar::random(&mut rng)).collect_vec();
 
-    // Setup
-    let pc_gens = PedersenGens::default();
-    let bp_gens = BulletproofGens::new(
-        2 * k as usize, /* gens_capacity */
-        1,              /* party_capacity */
-    );
-
-    let (proof, x_commit, y_commit) = ShuffleProof::prove(
-        &my_values,
-        &my_values,
-        &pc_gens,
-        &bp_gens,
-        test_args.mpc_fabric.clone(),
-    )?;
+    let (proof, x_commit, y_commit) =
+        ShuffleProof::prove(&my_values, &my_values, test_args.mpc_fabric.clone())?;
 
     ShuffleProof::verify(proof, x_commit, y_commit)
         .err()
