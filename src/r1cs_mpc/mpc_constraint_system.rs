@@ -21,7 +21,7 @@ use super::{
 /// verifier, gadgets for the constraint system should be written
 /// using the `ConstraintSystem` trait, so that the prover and
 /// verifier share the logic for specifying constraints.
-pub trait MpcConstraintSystem<'a> {
+pub trait MpcConstraintSystem {
     /// Leases the proof transcript to the user, so they can
     /// add extra data to which the proof must be bound, but which
     /// is not available before creation of the constraint system.
@@ -94,9 +94,9 @@ pub trait MpcConstraintSystem<'a> {
 /// while gadgets that need randomization should use trait bound `CS: RandomizedConstraintSystem`.
 /// Gadgets generally _should not_ use this trait as a bound on the CS argument: it should be used
 /// by the higher-order protocol that composes gadgets together.
-pub trait MpcRandomizableConstraintSystem<'a>: MpcConstraintSystem<'a> {
+pub trait MpcRandomizableConstraintSystem: MpcConstraintSystem {
     /// Represents a concrete type for the CS in a randomization phase.
-    type RandomizedCS: MpcRandomizedConstraintSystem<'a>;
+    type RandomizedCS: MpcRandomizedConstraintSystem;
 
     /// Specify additional variables and constraints randomized using a challenge scalar
     /// bound to the assignments of the non-randomized variables.
@@ -119,7 +119,7 @@ pub trait MpcRandomizableConstraintSystem<'a>: MpcConstraintSystem<'a> {
     /// ```
     fn specify_randomized_constraints<F>(&mut self, callback: F) -> Result<(), R1CSError>
     where
-        F: 'a + Fn(&mut Self::RandomizedCS) -> Result<(), R1CSError>;
+        F: 'static + Send + Sync + Fn(&mut Self::RandomizedCS) -> Result<(), R1CSError>;
 }
 
 /// Represents a constraint system in the second phase:
@@ -127,7 +127,7 @@ pub trait MpcRandomizableConstraintSystem<'a>: MpcConstraintSystem<'a> {
 ///
 /// Note: this trait also includes `ConstraintSystem` trait
 /// in order to allow composition of gadgets: e.g. a shuffle gadget can be used in both phases.
-pub trait MpcRandomizedConstraintSystem<'a>: MpcConstraintSystem<'a> {
+pub trait MpcRandomizedConstraintSystem: MpcConstraintSystem {
     /// Generates a challenge scalar.
     ///
     /// ### Usage

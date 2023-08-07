@@ -56,11 +56,11 @@ use super::{
 /// challenges from the protocol transcript that precedes them. These constraints are encoded in the
 /// `deferred_constraints` field.
 #[allow(dead_code, non_snake_case)]
-pub struct MpcProver<'a, 't, 'g> {
+pub struct MpcProver {
     /// The protocol transcript, used for constructing Fiat-Shamir challenges
     transcript: MpcTranscript,
     /// Generators used for Pedersen commitments
-    pc_gens: &'g PedersenGens,
+    pc_gens: PedersenGens,
     /// Teh constraints accumulated so far.
     constraints: Vec<MpcLinearCombination>,
     /// Stores assignments to the "left" of multiplication gates.
@@ -82,7 +82,7 @@ pub struct MpcProver<'a, 't, 'g> {
     /// when non-randomized variables are committed.
     #[allow(clippy::type_complexity)]
     deferred_constraints:
-        Vec<Box<dyn Fn(&mut RandomizingMpcProver<'a, 't, 'g>) -> Result<(), R1CSError> + 'a>>,
+        Vec<Box<dyn Send + Sync + FnOnce(&mut RandomizingMpcProver) -> Result<(), R1CSError>>>,
     /// The underlying MPC fabric
     fabric: MpcFabric,
 }
@@ -91,17 +91,17 @@ pub struct MpcProver<'a, 't, 'g> {
 ///
 /// In this phase constraints may be built using challenge scalars derived from the
 /// protocol transcript so far.
-pub struct RandomizingMpcProver<'a, 't, 'g> {
-    prover: MpcProver<'a, 't, 'g>,
+pub struct RandomizingMpcProver {
+    prover: MpcProver,
 }
 
-impl<'a, 't, 'g> MpcProver<'a, 't, 'g> {
+impl MpcProver {
     /// Create a new MpcProver with a custom network
     pub fn new_with_network<S: 'static + SharedValueSource>(
         network: QuicTwoPartyNet,
         beaver_source: S,
         transcript: Transcript,
-        pc_gens: &'g PedersenGens,
+        pc_gens: PedersenGens,
     ) -> Self {
         // Build a fabric and transcript
         let fabric = MpcFabric::new(network, beaver_source);
@@ -130,7 +130,7 @@ impl<'a, 't, 'g> MpcProver<'a, 't, 'g> {
     pub fn new_with_fabric(
         fabric: MpcFabric,
         transcript: Transcript,
-        pc_gens: &'g PedersenGens,
+        pc_gens: PedersenGens,
     ) -> Self {
         let mut transcript = MpcTranscript::new(transcript, fabric.clone());
         transcript.r1cs_domain_sep();
@@ -173,7 +173,7 @@ impl<'a, 't, 'g> MpcProver<'a, 't, 'g> {
     }
 }
 
-impl<'a, 't, 'g> MpcConstraintSystem<'a> for MpcProver<'a, 't, 'g> {
+impl MpcConstraintSystem for MpcProver {
     /// Lease the transcript to the caller
     fn transcript(&mut self) -> &mut MpcTranscript {
         self.transcript.borrow_mut()
@@ -295,19 +295,19 @@ impl<'a, 't, 'g> MpcConstraintSystem<'a> for MpcProver<'a, 't, 'g> {
     }
 }
 
-impl<'a, 't, 'g> MpcRandomizableConstraintSystem<'a> for MpcProver<'a, 't, 'g> {
-    type RandomizedCS = RandomizingMpcProver<'a, 't, 'g>;
+impl MpcRandomizableConstraintSystem for MpcProver {
+    type RandomizedCS = RandomizingMpcProver;
 
     fn specify_randomized_constraints<F>(&mut self, callback: F) -> Result<(), R1CSError>
     where
-        F: 'a + Fn(&mut Self::RandomizedCS) -> Result<(), R1CSError>,
+        F: 'static + Send + Sync + FnOnce(&mut Self::RandomizedCS) -> Result<(), R1CSError>,
     {
         self.deferred_constraints.push(Box::new(callback));
         Ok(())
     }
 }
 
-impl<'a, 't, 'g> MpcConstraintSystem<'a> for RandomizingMpcProver<'a, 't, 'g> {
+impl MpcConstraintSystem for RandomizingMpcProver {
     fn transcript(&mut self) -> &mut MpcTranscript {
         self.prover.transcript()
     }
@@ -347,13 +347,13 @@ impl<'a, 't, 'g> MpcConstraintSystem<'a> for RandomizingMpcProver<'a, 't, 'g> {
     }
 }
 
-impl<'a, 't, 'g> MpcRandomizedConstraintSystem<'a> for RandomizingMpcProver<'a, 't, 'g> {
+impl MpcRandomizedConstraintSystem for RandomizingMpcProver {
     fn challenge_scalar(&mut self, label: &'static [u8]) -> ScalarResult {
         self.prover.transcript.challenge_scalar(label)
     }
 }
 
-impl<'a, 't, 'g> MpcProver<'a, 't, 'g> {
+impl MpcProver {
     /// From a privately held input value, secret share the value and commit to it
     ///
     /// The result is a variable allocated both in the MPC network and in the
@@ -989,5 +989,24 @@ impl<'a, 't, 'g> MpcProver<'a, 't, 'g> {
             e_blinding: e_blinding_open,
             ipp_proof: ipp,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::MpcProver;
+
+    /// This will fail to compile if T is not Send
+    fn assert_send<T: Send>() {}
+
+    /// This will fail to compile if T is not Sync
+    fn assert_sync<T: Sync>() {}
+
+    /// Assert that the prover is `Send` and `Sync`, we require this because much of the
+    /// proof generation happens async
+    #[test]
+    fn test_prover_is_send_and_sync() {
+        assert_send::<MpcProver>();
+        assert_sync::<MpcProver>()
     }
 }
