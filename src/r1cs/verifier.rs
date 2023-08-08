@@ -320,7 +320,7 @@ impl<'t, 'g> Verifier<'t, 'g> {
     /// This has the same logic as `ProverCS::flattened_constraints()`
     /// but also computes the constant terms (which the prover skips
     /// because they're not needed to construct the proof).
-    fn flattened_constraints(
+    pub fn flattened_constraints(
         &mut self,
         z: &Scalar,
     ) -> (Vec<Scalar>, Vec<Scalar>, Vec<Scalar>, Vec<Scalar>, Scalar) {
