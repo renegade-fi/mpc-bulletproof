@@ -34,36 +34,36 @@ const TWO_PHASE_COMMITMENTS: u8 = 1;
 #[allow(non_snake_case)]
 pub struct R1CSProof {
     /// Commitment to the values of input wires in the first phase.
-    pub(crate) A_I1: StarkPoint,
+    pub A_I1: StarkPoint,
     /// Commitment to the values of output wires in the first phase.
-    pub(crate) A_O1: StarkPoint,
+    pub A_O1: StarkPoint,
     /// Commitment to the blinding factors in the first phase.
-    pub(crate) S1: StarkPoint,
+    pub S1: StarkPoint,
     /// Commitment to the values of input wires in the second phase.
-    pub(crate) A_I2: StarkPoint,
+    pub A_I2: StarkPoint,
     /// Commitment to the values of output wires in the second phase.
-    pub(crate) A_O2: StarkPoint,
+    pub A_O2: StarkPoint,
     /// Commitment to the blinding factors in the second phase.
-    pub(crate) S2: StarkPoint,
+    pub S2: StarkPoint,
     /// Commitment to the \\(t_1\\) coefficient of \\( t(x) \\)
-    pub(crate) T_1: StarkPoint,
+    pub T_1: StarkPoint,
     /// Commitment to the \\(t_3\\) coefficient of \\( t(x) \\)
-    pub(crate) T_3: StarkPoint,
+    pub T_3: StarkPoint,
     /// Commitment to the \\(t_4\\) coefficient of \\( t(x) \\)
-    pub(crate) T_4: StarkPoint,
+    pub T_4: StarkPoint,
     /// Commitment to the \\(t_5\\) coefficient of \\( t(x) \\)
-    pub(crate) T_5: StarkPoint,
+    pub T_5: StarkPoint,
     /// Commitment to the \\(t_6\\) coefficient of \\( t(x) \\)
-    pub(crate) T_6: StarkPoint,
+    pub T_6: StarkPoint,
     /// Evaluation of the polynomial \\(t(x)\\) at the challenge point \\(x\\)
-    pub(crate) t_x: Scalar,
+    pub t_x: Scalar,
     /// Blinding factor for the synthetic commitment to \\( t(x) \\)
-    pub(crate) t_x_blinding: Scalar,
+    pub t_x_blinding: Scalar,
     /// Blinding factor for the synthetic commitment to the
     /// inner-product arguments
-    pub(crate) e_blinding: Scalar,
+    pub e_blinding: Scalar,
     /// Proof data for the inner-product argument.
-    pub(crate) ipp_proof: InnerProductProof,
+    pub ipp_proof: InnerProductProof,
 }
 
 impl R1CSProof {
