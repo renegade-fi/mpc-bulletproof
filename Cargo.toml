@@ -1,10 +1,5 @@
 [package]
 name = "mpc-bulletproof"
-# Before doing a release:
-# - update version field 
-# - update html_root_url
-# - ensure yoloproofs was disabled in an atomic (revertable) commit
-# - update CHANGELOG
 version = "0.1.0"
 authors = [
     "Joey Kraut <joey@renegade.fi>",

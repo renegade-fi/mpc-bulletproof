@@ -27,9 +27,7 @@ mod notes {
 mod errors;
 mod generators;
 mod inner_product_proof;
-#[cfg(feature = "integration_test")]
 pub use inner_product_proof::*;
-// mod range_proof;
 pub mod transcript;
 
 pub use crate::errors::ProofError;
