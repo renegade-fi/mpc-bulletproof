@@ -1,247 +1,129 @@
-#![allow(non_snake_case)]
+//! Benchmarks for r1cs
 
-#[macro_use]
-extern crate criterion;
-use criterion::Criterion;
+use std::time::{Duration, Instant};
 
-// Code below copied from ../tests/r1cs.rs
-//
-// Ideally we wouldn't duplicate it, but AFAIK criterion requires a
-// seperate benchmark harness, while the test code uses a different
-// test harness, so I (hdevalence) just copied the code over.  It
-// should not be edited here.  In the future it would be good if
-// someone wants to figure a way to use #[path] attributes or
-// something to avoid the duplication.
+use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
+use merlin::HashChainTranscript;
+use mpc_bulletproof::{
+    r1cs::{ConstraintSystem, Prover, R1CSProof, Verifier},
+    BulletproofGens, PedersenGens,
+};
+use mpc_stark::{algebra::scalar::Scalar, random_point};
+use rand::thread_rng;
 
-use merlin::HashChainTranscript as Transcript;
-use mpc_bulletproof::r1cs::*;
-use mpc_bulletproof::{BulletproofGens, PedersenGens};
-use mpc_stark::algebra::scalar::Scalar;
-use mpc_stark::algebra::stark_curve::StarkPoint;
-use rand::seq::SliceRandom;
-use rand::{thread_rng, Rng};
+/// The max number of constraints to benchmark
+const MAX_CONSTRAINTS_LN: usize = 10; // 2^10 = 1024
 
-// Shuffle gadget (documented in markdown file)
+// -----------
+// | Helpers |
+// -----------
 
-/// A proof-of-shuffle.
-struct ShuffleProof(R1CSProof);
+/// Benchmark a prover with a given number of constraints
+fn bench_prover_with_size(n_constraints: usize, c: &mut Criterion) {
+    assert!(n_constraints.is_power_of_two());
 
-impl ShuffleProof {
-    fn gadget<CS: RandomizableConstraintSystem>(
-        cs: &mut CS,
-        x: Vec<Variable>,
-        y: Vec<Variable>,
-    ) -> Result<(), R1CSError> {
-        assert_eq!(x.len(), y.len());
-        let k = x.len();
+    let mut group = c.benchmark_group("r1cs");
+    let benchmark_id = BenchmarkId::new("prover", n_constraints);
+    group.bench_function(benchmark_id, |b| {
+        b.iter_custom(|n_iters| {
+            // `Prover::prove` takes ownership of the constraint system, so we need custom
+            // setup code and timing per-loop to only time the proof generation latency
+            let mut total_time = Duration::ZERO;
 
-        if k == 1 {
-            cs.constrain(y[0] - x[0]);
-            return Ok(());
-        }
+            for _ in 0..n_iters {
+                let (_proof, duration) = prove_sized_statement_with_timer(n_constraints);
+                total_time += duration;
+            }
 
-        cs.specify_randomized_constraints(move |cs| {
-            let z = cs.challenge_scalar(b"shuffle challenge");
-
-            // Make last x multiplier for i = k-1 and k-2
-            let (_, _, last_mulx_out) = cs.multiply(x[k - 1] - z, x[k - 2] - z);
-
-            // Make multipliers for x from i == [0, k-3]
-            let first_mulx_out = (0..k - 2).rev().fold(last_mulx_out, |prev_out, i| {
-                let (_, _, o) = cs.multiply(prev_out.into(), x[i] - z);
-                o
-            });
-
-            // Make last y multiplier for i = k-1 and k-2
-            let (_, _, last_muly_out) = cs.multiply(y[k - 1] - z, y[k - 2] - z);
-
-            // Make multipliers for y from i == [0, k-3]
-            let first_muly_out = (0..k - 2).rev().fold(last_muly_out, |prev_out, i| {
-                let (_, _, o) = cs.multiply(prev_out.into(), y[i] - z);
-                o
-            });
-
-            // Constrain last x mul output and last y mul output to be equal
-            cs.constrain(first_mulx_out - first_muly_out);
-
-            Ok(())
-        })
-    }
+            total_time
+        });
+    });
 }
 
-impl ShuffleProof {
-    /// Attempt to construct a proof that `output` is a permutation of `input`.
-    ///
-    /// Returns a tuple `(proof, input_commitments || output_commitments)`.
-    pub fn prove(
-        pc_gens: &PedersenGens,
-        bp_gens: &BulletproofGens,
-        transcript: &mut Transcript,
-        input: &[Scalar],
-        output: &[Scalar],
-    ) -> Result<(ShuffleProof, Vec<StarkPoint>, Vec<StarkPoint>), R1CSError> {
-        // Apply a domain separator with the shuffle parameters to the transcript
-        // XXX should this be part of the gadget?
-        let mut rng = thread_rng();
-        let k = input.len();
-        transcript.append_message(b"dom-sep", b"ShuffleProof");
-        transcript.append_u64(b"k", k as u64);
+/// Benchmark a verifier with a given number of constraints
+fn bench_verifier_with_size(n_constraints: usize, c: &mut Criterion) {
+    assert!(n_constraints.is_power_of_two());
 
-        let mut prover = Prover::new(pc_gens, transcript);
+    let mut group = c.benchmark_group("r1cs");
+    let benchmark_id = BenchmarkId::new("verifier", n_constraints);
+    group.bench_function(benchmark_id, |b| {
+        // Prove a statement
+        let (proof, _duration) = prove_sized_statement_with_timer(n_constraints);
 
-        let (input_commitments, input_vars): (Vec<_>, Vec<_>) = input
-            .iter()
-            .map(|v| prover.commit(*v, Scalar::random(&mut rng)))
-            .unzip();
+        b.iter_custom(|n_iters| {
+            let mut total_time = Duration::ZERO;
 
-        let (output_commitments, output_vars): (Vec<_>, Vec<_>) = output
-            .iter()
-            .map(|v| prover.commit(*v, Scalar::random(&mut rng)))
-            .unzip();
+            for _ in 0..n_iters {
+                // Setup the verifier
+                let pc_gens = PedersenGens::default();
+                let mut transcript = HashChainTranscript::new(b"test");
+                let mut verifier = Verifier::new(&pc_gens, &mut transcript);
 
-        ShuffleProof::gadget(&mut prover, input_vars, output_vars)?;
+                let bp_gens = BulletproofGens::new(n_constraints, 1 /* party_capacity */);
 
-        let proof = prover.prove(bp_gens)?;
+                // Apply the constraints
+                let mut var = verifier.commit(random_point());
+                for _ in 0..n_constraints {
+                    let (_, _, new_var) = verifier.multiply(var.into(), var.into());
+                    var = new_var;
+                }
 
-        Ok((ShuffleProof(proof), input_commitments, output_commitments))
-    }
+                // Verify the proof
+                let start_time = Instant::now();
+                assert!(black_box(verifier.verify(&proof, &bp_gens)).is_err());
+                total_time += start_time.elapsed();
+            }
+
+            total_time
+        });
+    });
 }
 
-impl ShuffleProof {
-    /// Attempt to verify a `ShuffleProof`.
-    pub fn verify(
-        &self,
-        pc_gens: &PedersenGens,
-        bp_gens: &BulletproofGens,
-        transcript: &mut Transcript,
-        input_commitments: &[StarkPoint],
-        output_commitments: &[StarkPoint],
-    ) -> Result<(), R1CSError> {
-        // Apply a domain separator with the shuffle parameters to the transcript
-        // XXX should this be part of the gadget?
-        let k = input_commitments.len();
-        transcript.append_message(b"dom-sep", b"ShuffleProof");
-        transcript.append_u64(b"k", k as u64);
-
-        let mut verifier = Verifier::new(pc_gens, transcript);
-
-        let input_vars: Vec<_> = input_commitments
-            .iter()
-            .map(|V| verifier.commit(*V))
-            .collect();
-
-        let output_vars: Vec<_> = output_commitments
-            .iter()
-            .map(|V| verifier.commit(*V))
-            .collect();
-
-        ShuffleProof::gadget(&mut verifier, input_vars, output_vars)?;
-
-        verifier.verify(&self.0, bp_gens)
-    }
-}
-
-// End of copied code.
-
-/// Binary logarithm of maximum shuffle size.
-const LG_MAX_SHUFFLE_SIZE: usize = 10;
-/// Maximum shuffle size to benchmark.
-const MAX_SHUFFLE_SIZE: usize = 1 << LG_MAX_SHUFFLE_SIZE;
-
-fn bench_kshuffle_prove(c: &mut Criterion) {
-    // Construct Bulletproof generators externally
+/// Prove a sized circuit and time *only* the prover latency
+fn prove_sized_statement_with_timer(n_constraints: usize) -> (R1CSProof, Duration) {
+    // Build a prover
     let pc_gens = PedersenGens::default();
-    let bp_gens = BulletproofGens::new(2 * MAX_SHUFFLE_SIZE, 1);
+    let mut transcript = HashChainTranscript::new(b"test");
+    let mut prover = Prover::new(&pc_gens, &mut transcript);
 
-    #[allow(deprecated)]
-    c.bench_function_over_inputs(
-        "k-shuffle proof creation",
-        move |b, k| {
-            // Generate inputs and outputs to kshuffle
-            let mut rng = rand::thread_rng();
-            let (min, max) = (0u64, std::u64::MAX);
-            let input: Vec<Scalar> = (0..*k)
-                .map(|_| Scalar::from(rng.gen_range(min..max)))
-                .collect();
-            let mut output = input.clone();
-            output.shuffle(&mut rand::thread_rng());
+    let bp_gens = BulletproofGens::new(n_constraints, 1 /* party_capacity */);
 
-            // Make kshuffle proof
-            b.iter(|| {
-                let mut prover_transcript = Transcript::new(b"ShuffleBenchmark");
-                ShuffleProof::prove(&pc_gens, &bp_gens, &mut prover_transcript, &input, &output)
-                    .unwrap();
-            })
-        },
-        (1..=LG_MAX_SHUFFLE_SIZE)
-            .map(|i| 1 << i)
-            .collect::<Vec<_>>(),
-    );
+    // Allocate `n_constraints` constraints
+    let mut rng = thread_rng();
+    let val = Scalar::random(&mut rng);
+    let (_, mut var) = prover.commit(val, Scalar::random(&mut rng));
+
+    for _ in 0..n_constraints {
+        (_, _, var) = prover.multiply(var.into(), var.into());
+    }
+
+    // Only time proof generation
+    let start_time = Instant::now();
+    let proof = prover.prove(&bp_gens).unwrap();
+    (proof, start_time.elapsed())
 }
 
-criterion_group! {
-    name = kshuffle_prove;
-    // Lower the sample size to run faster; larger shuffle sizes are
-    // long so we're not microbenchmarking anyways.
+// --------------
+// | Benchmarks |
+// --------------
+
+/// Benchmark the prover's latency
+fn bench_prover(c: &mut Criterion) {
+    for i in (1..=MAX_CONSTRAINTS_LN).map(|i| 1usize << i) {
+        bench_prover_with_size(i, c);
+    }
+}
+
+/// Benchmarks the verifier's latency
+fn bench_verifier(c: &mut Criterion) {
+    for i in (1..=MAX_CONSTRAINTS_LN).map(|i| 1usize << i) {
+        bench_verifier_with_size(i, c);
+    }
+}
+
+criterion_group!(
+    name = r1cs;
     config = Criterion::default().sample_size(10);
-    targets =
-    bench_kshuffle_prove,
-}
-
-fn bench_kshuffle_verify(c: &mut Criterion) {
-    // Construct Bulletproof generators externally
-    let pc_gens = PedersenGens::default();
-    let bp_gens = BulletproofGens::new(2 * MAX_SHUFFLE_SIZE, 1);
-
-    #[allow(deprecated)]
-    c.bench_function_over_inputs(
-        "k-shuffle proof verification",
-        move |b, k| {
-            // Generate the proof in its own scope to prevent reuse of
-            // prover variables by the verifier
-            let (proof, input_commitments, output_commitments) = {
-                // Generate inputs and outputs to kshuffle
-                let mut rng = rand::thread_rng();
-                let (min, max) = (0u64, std::u64::MAX);
-                let input: Vec<Scalar> = (0..*k)
-                    .map(|_| Scalar::from(rng.gen_range(min..max)))
-                    .collect();
-                let mut output = input.clone();
-                output.shuffle(&mut rand::thread_rng());
-
-                let mut prover_transcript = Transcript::new(b"ShuffleBenchmark");
-
-                ShuffleProof::prove(&pc_gens, &bp_gens, &mut prover_transcript, &input, &output)
-                    .unwrap()
-            };
-
-            // Verify kshuffle proof
-            b.iter(|| {
-                let mut verifier_transcript = Transcript::new(b"ShuffleBenchmark");
-                proof
-                    .verify(
-                        &pc_gens,
-                        &bp_gens,
-                        &mut verifier_transcript,
-                        &input_commitments,
-                        &output_commitments,
-                    )
-                    .unwrap();
-            })
-        },
-        (1..=LG_MAX_SHUFFLE_SIZE)
-            .map(|i| 1 << i)
-            .collect::<Vec<_>>(),
-    );
-}
-
-criterion_group! {
-    name = kshuffle_verify;
-    // Lower the sample size to run faster; larger shuffle sizes are
-    // long so we're not microbenchmarking anyways.
-    config = Criterion::default().sample_size(10);
-    targets =
-    bench_kshuffle_verify,
-}
-
-criterion_main!(kshuffle_prove, kshuffle_verify);
+    targets = bench_prover, bench_verifier
+);
+criterion_main!(r1cs);
