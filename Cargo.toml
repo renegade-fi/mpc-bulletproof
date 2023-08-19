@@ -14,7 +14,6 @@ description = "A pure-Rust implementation of collaboratively proved Bulletproofs
 edition = "2021"
 
 [dependencies]
-ark-ec = "0.4"
 ark-ff = "0.4"
 ark-serialize = "0.4"
 futures = "0.3"
@@ -24,6 +23,7 @@ sha3 = { version = "0.8", default-features = false }
 digest = { version = "0.8", default-features = false }
 rand_core = { version = "0.5", default-features = false, features = ["alloc"] }
 rand = { version = "0.8", default-features = false, optional = true }
+rayon = "1"
 byteorder = { version = "1", default-features = false }
 num-bigint = "0.4"
 itertools = "0.10"
@@ -32,6 +32,7 @@ serde_derive = { version = "1", default-features = false }
 thiserror = { version = "1", optional = true }
 tokio = { version = "1.12", features = ["macros", "rt-multi-thread"] }
 merlin = { git = "https://github.com/renegade-fi/merlin" }
+unzip-n = "0.1"
 
 [dev-dependencies]
 async-std = "1.12"
@@ -56,19 +57,25 @@ integration_test = []
 
 [[test]]
 name = "r1cs"
-required_features = ["multiprover"]
 
 [[test]]
 name = "integration"
 path = "integration/main.rs"
 harness = false
-required_features = ["integration_test", "multiprover"]
 
 [[bench]]
 name = "generators"
 harness = false
 
 [[bench]]
-name = "r1cs"
+name = "shuffle"
 harness = false
 required-features = ["multiprover"]
+
+[[bench]]
+name = "r1cs"
+harness = false
+
+[[bench]]
+name = "inner_product"
+harness = false
