@@ -18,7 +18,7 @@ ark-ff = "0.4"
 ark-serialize = "0.4"
 futures = "0.3"
 futures-util = "0.3"
-mpc-stark = "0.2"
+mpc-stark = "0.2.1"
 sha3 = { version = "0.8", default-features = false }
 digest = { version = "0.8", default-features = false }
 rand_core = { version = "0.5", default-features = false, features = ["alloc"] }
