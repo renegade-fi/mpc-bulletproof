@@ -5,10 +5,10 @@ use std::time::{Duration, Instant};
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use merlin::HashChainTranscript;
 use mpc_bulletproof::{
-    r1cs::{ConstraintSystem, Prover, R1CSProof, Verifier},
+    r1cs::{Prover, R1CSProof, RandomizableConstraintSystem, Verifier},
     BulletproofGens, PedersenGens,
 };
-use mpc_stark::{algebra::scalar::Scalar, random_point};
+use mpc_stark::algebra::scalar::Scalar;
 use rand::thread_rng;
 
 /// The max number of constraints to benchmark
@@ -17,6 +17,20 @@ const MAX_CONSTRAINTS_LN: usize = 10; // 2^10 = 1024
 // -----------
 // | Helpers |
 // -----------
+
+struct DummyCircuit;
+impl DummyCircuit {
+    /// Apply dummy constraints to a given proof system
+    pub fn apply_constraints<CS: RandomizableConstraintSystem>(n_constraints: usize, cs: &mut CS) {
+        let mut rng = thread_rng();
+        let val = Scalar::random(&mut rng);
+        let mut var = cs.commit_public(val);
+
+        for _ in 0..n_constraints {
+            (_, _, var) = cs.multiply(var.into(), var.into());
+        }
+    }
+}
 
 /// Benchmark a prover with a given number of constraints
 fn bench_prover_with_size(n_constraints: usize, c: &mut Criterion) {
@@ -62,11 +76,7 @@ fn bench_verifier_with_size(n_constraints: usize, c: &mut Criterion) {
                 let bp_gens = BulletproofGens::new(n_constraints, 1 /* party_capacity */);
 
                 // Apply the constraints
-                let mut var = verifier.commit(random_point());
-                for _ in 0..n_constraints {
-                    let (_, _, new_var) = verifier.multiply(var.into(), var.into());
-                    var = new_var;
-                }
+                DummyCircuit::apply_constraints(n_constraints, &mut verifier);
 
                 // Verify the proof
                 let start_time = Instant::now();
@@ -89,13 +99,7 @@ fn prove_sized_statement_with_timer(n_constraints: usize) -> (R1CSProof, Duratio
     let bp_gens = BulletproofGens::new(n_constraints, 1 /* party_capacity */);
 
     // Allocate `n_constraints` constraints
-    let mut rng = thread_rng();
-    let val = Scalar::random(&mut rng);
-    let (_, mut var) = prover.commit(val, Scalar::random(&mut rng));
-
-    for _ in 0..n_constraints {
-        (_, _, var) = prover.multiply(var.into(), var.into());
-    }
+    DummyCircuit::apply_constraints(n_constraints, &mut prover);
 
     // Only time proof generation
     let start_time = Instant::now();
