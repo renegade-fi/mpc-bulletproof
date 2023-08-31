@@ -1,26 +1,23 @@
 #![allow(non_snake_case)]
 
-use rand::Rng;
 use itertools::Itertools;
-use mpc_bulletproof::{BulletproofGens, PedersenGens, r1cs_mpc::{
-    PartiallySharedR1CSProof,
-    MpcRandomizableConstraintSystem,
-    MpcRandomizedConstraintSystem,
-    MpcConstraintSystem,
-    MpcVariable,
-    MpcProver,
-    MpcLinearCombination,
-    MultiproverError},
-
+use merlin::HashChainTranscript as Transcript;
+use mpc_bulletproof::{
+    r1cs_mpc::{
+        MpcConstraintSystem, MpcLinearCombination, MpcProver, MpcRandomizableConstraintSystem,
+        MpcRandomizedConstraintSystem, MpcVariable, MultiproverError, PartiallySharedR1CSProof,
+    },
+    BulletproofGens, PedersenGens,
 };
 use mpc_stark::algebra::authenticated_stark_point::AuthenticatedStarkPointOpenResult;
-use rand::seq::SliceRandom;
-use rand::{thread_rng};
-use merlin::HashChainTranscript as Transcript;
-use mpc_stark::{
-    algebra::scalar::Scalar, beaver::SharedValueSource, network::{MpcNetwork}, MpcFabric, PARTY0, PARTY1,
-};
 use mpc_stark::error::MpcNetworkError;
+use mpc_stark::{
+    algebra::scalar::Scalar, beaver::SharedValueSource, network::MpcNetwork, MpcFabric, PARTY0,
+    PARTY1,
+};
+use rand::seq::SliceRandom;
+use rand::thread_rng;
+use rand::Rng;
 use std::{
     pin::Pin,
     task::{Context, Poll},
@@ -30,18 +27,14 @@ use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 
 use mpc_stark::network::NetworkOutbound;
 
-use mpc_stark::network::PartyId;
-use futures::{Future, Sink, Stream};
 use async_trait::async_trait;
 use futures::future::join_all;
-use mpc_bulletproof::{
-    r1cs::{
-        ConstraintSystem, R1CSError, RandomizableConstraintSystem, RandomizedConstraintSystem,
-        Variable, Verifier,
-    },
+use futures::{Future, Sink, Stream};
+use mpc_bulletproof::r1cs::{
+    ConstraintSystem, R1CSError, RandomizableConstraintSystem, RandomizedConstraintSystem,
+    Variable, Verifier,
 };
-
-
+use mpc_stark::network::PartyId;
 
 /// An implementation of a beaver value source that returns
 /// beaver triples (0, 0, 0) for party 0 and (1, 1, 1) for party 1
@@ -121,7 +114,6 @@ impl UnboundedDuplexStream {
     }
 }
 
-
 /// A dummy network implementation used for unit testing
 pub struct MockNetwork {
     /// The ID of the local party
@@ -186,8 +178,8 @@ impl Sink<NetworkOutbound> for MockNetwork {
 pub async fn execute_mock_mpc<T, S, F>(mut f: F) -> (T, T)
 where
     T: Send + 'static,
-S: Future<Output = T> + Send + 'static,
-F: FnMut(MpcFabric) -> S,
+    S: Future<Output = T> + Send + 'static,
+    F: FnMut(MpcFabric) -> S,
 {
     // Build a duplex stream to broker communication between the two parties
     let (party0_stream, party1_stream) = UnboundedDuplexStream::new_duplex_pair();
@@ -275,7 +267,14 @@ impl MpcShuffleProof {
         mut transcript: Transcript,
         input: &[Scalar],
         output: &[Scalar],
-    ) -> Result<(MpcShuffleProof, Vec<AuthenticatedStarkPointOpenResult>, Vec<AuthenticatedStarkPointOpenResult>), String> {
+    ) -> Result<
+        (
+            MpcShuffleProof,
+            Vec<AuthenticatedStarkPointOpenResult>,
+            Vec<AuthenticatedStarkPointOpenResult>,
+        ),
+        String,
+    > {
         let mut rng = thread_rng();
         let k = input.len();
         transcript.append_message(b"dom-sep", b"ShuffleProof");
@@ -288,7 +287,9 @@ impl MpcShuffleProof {
             .batch_commit(
                 PARTY0,
                 input.iter().copied(),
-                &(0..input.len()).map(|_| Scalar::random(&mut rng)).collect_vec(),
+                &(0..input.len())
+                    .map(|_| Scalar::random(&mut rng))
+                    .collect_vec(),
             )
             .map_err(|err| format!("Error committing to `input` values: {:?}", err))?;
 
@@ -296,7 +297,9 @@ impl MpcShuffleProof {
             .batch_commit(
                 PARTY1,
                 output.iter().copied(),
-                &(0..output.len()).map(|_| Scalar::random(&mut rng)).collect_vec(),
+                &(0..output.len())
+                    .map(|_| Scalar::random(&mut rng))
+                    .collect_vec(),
             )
             .map_err(|err| format!("Error committing to `output` values: {:?}", err))?;
 
@@ -312,9 +315,7 @@ impl MpcShuffleProof {
     }
 }
 
-
 impl MpcShuffleProof {
-
     fn single_prover_gadget<CS: RandomizableConstraintSystem>(
         cs: &mut CS,
         x: Vec<Variable>,
@@ -378,25 +379,28 @@ impl MpcShuffleProof {
         let mut verifier = Verifier::new(pc_gens, transcript);
 
         let input_vars = input_commitments_starkpoint
-            .iter().map(|V| verifier.commit(*V)).collect_vec();
+            .iter()
+            .map(|V| verifier.commit(*V))
+            .collect_vec();
         let output_vars = output_commitments_starkpoint
-            .iter().map(|V| verifier.commit(*V)).collect_vec();
+            .iter()
+            .map(|V| verifier.commit(*V))
+            .collect_vec();
 
         Self::single_prover_gadget(&mut verifier, input_vars, output_vars)
             .map_err(MultiproverError::ProverError)?;
-        verifier.verify(&opened_proof, bp_gens)
+        verifier
+            .verify(&opened_proof, bp_gens)
             .map_err(MultiproverError::ProverError)
-
     }
 }
-
 
 #[tokio::test]
 async fn mpc_shuffle_proof_test() {
     let k: usize = 2;
-    let (_, _) = execute_mock_mpc(|fabric| async  move {
-    let pc_gens = PedersenGens::default();
-    let bp_gens = BulletproofGens::new((2 * k).next_power_of_two(), 1);
+    let (_, _) = execute_mock_mpc(|fabric| async move {
+        let pc_gens = PedersenGens::default();
+        let bp_gens = BulletproofGens::new((2 * k).next_power_of_two(), 1);
 
         let (proof, input_commitments, output_commitments) = {
             // Randomly generate inputs and outputs to kshuffle
@@ -409,17 +413,28 @@ async fn mpc_shuffle_proof_test() {
             output.shuffle(&mut rand::thread_rng());
 
             let prover_transcript = Transcript::new(b"ShuffleProofTest");
-            MpcShuffleProof::prove(fabric.clone(), pc_gens, &bp_gens, prover_transcript, &input, &output).unwrap()
+            MpcShuffleProof::prove(
+                fabric.clone(),
+                pc_gens,
+                &bp_gens,
+                prover_transcript,
+                &input,
+                &output,
+            )
+            .unwrap()
         };
 
         let mut verifier_transcript = Transcript::new(b"ShuffleProofTest");
-        proof.verify(
-            &pc_gens,
-            &bp_gens,
-            &mut verifier_transcript,
-            input_commitments,
-            output_commitments
-        ).await.err()
+        proof
+            .verify(
+                &pc_gens,
+                &bp_gens,
+                &mut verifier_transcript,
+                input_commitments,
+                output_commitments,
+            )
+            .await
+            .err()
             .map(|err| {
                 if let MultiproverError::ProverError(R1CSError::VerificationError) = err {
                     Ok(())
@@ -428,5 +443,6 @@ async fn mpc_shuffle_proof_test() {
                 }
             })
             .unwrap_or(Err("Expected verification error, got Ok".to_string()))
-    }).await;
+    })
+    .await;
 }
