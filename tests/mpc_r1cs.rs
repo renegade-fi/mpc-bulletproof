@@ -2,8 +2,6 @@
 
 use rand::Rng;
 use itertools::Itertools;
-use merlin::HashChainTranscript as Transcript;
-use mpc_bulletproof::r1cs::*;
 use mpc_bulletproof::{BulletproofGens, PedersenGens, r1cs_mpc::{
     PartiallySharedR1CSProof,
     MpcRandomizableConstraintSystem,
@@ -13,11 +11,12 @@ use mpc_bulletproof::{BulletproofGens, PedersenGens, r1cs_mpc::{
     MpcProver,
     MpcLinearCombination,
     MultiproverError},
+
 };
 use mpc_stark::algebra::authenticated_stark_point::AuthenticatedStarkPointOpenResult;
 use rand::seq::SliceRandom;
 use rand::{thread_rng};
-
+use merlin::HashChainTranscript as Transcript;
 use mpc_stark::{
     algebra::scalar::Scalar, beaver::SharedValueSource, network::{MpcNetwork}, MpcFabric, PARTY0, PARTY1,
 };
@@ -35,28 +34,14 @@ use mpc_stark::network::PartyId;
 use futures::{Future, Sink, Stream};
 use async_trait::async_trait;
 use futures::future::join_all;
-use tokio::runtime::Handle;
+use mpc_bulletproof::{
+    r1cs::{
+        ConstraintSystem, R1CSError, RandomizableConstraintSystem, RandomizedConstraintSystem,
+        Variable, Verifier,
+    },
+};
 
-/// Block the current thread on a future
-pub fn await_result<T, F: Future<Output = T>>(future: F) -> T {
-    Handle::current().block_on(future)
-}
 
-/// Assert two values are equal, returning a `String` error if they are not
-pub fn assert_scalars_eq(a: &Scalar, b: &Scalar) -> Result<(), String> {
-    if a != b {
-        Err(format!("expected {:?} == {:?}", a, b))
-    } else {
-        Ok(())
-    }
-}
-
-/// A helper macro to await a vector of results by blocking the runtime
-macro_rules! await_vec {
-    ($vec:expr) => {{
-        Handle::current().block_on(join_all($vec))
-    }};
-}
 
 /// An implementation of a beaver value source that returns
 /// beaver triples (0, 0, 0) for party 0 and (1, 1, 1) for party 1
@@ -291,8 +276,6 @@ impl MpcShuffleProof {
         input: &[Scalar],
         output: &[Scalar],
     ) -> Result<(MpcShuffleProof, Vec<AuthenticatedStarkPointOpenResult>, Vec<AuthenticatedStarkPointOpenResult>), String> {
-        // Apply a domain separator with the shuffle parameters to the transcript
-        // XXX should this be part of the gadget?
         let mut rng = thread_rng();
         let k = input.len();
         transcript.append_message(b"dom-sep", b"ShuffleProof");
@@ -318,7 +301,7 @@ impl MpcShuffleProof {
             .map_err(|err| format!("Error committing to `output` values: {:?}", err))?;
 
         // Apply the gadget to specify the constraints and prove the statement
-        Self::gadget(&mut prover, output_vars.clone(), output_vars.clone())
+        Self::gadget(&mut prover, input_vars.clone(), output_vars.clone())
             .map_err(|err| format!("Error specifying constraints: {:?}", err))?;
 
         let proof = prover
@@ -376,38 +359,31 @@ impl MpcShuffleProof {
         input_commitments: Vec<AuthenticatedStarkPointOpenResult>,
         output_commitments: Vec<AuthenticatedStarkPointOpenResult>,
     ) -> Result<(), MultiproverError> {
-        // Apply a domain separator with the shuffle parameters to the transcript
-        // XXX should this be part of the gadget?
         let k = input_commitments.len();
         transcript.append_message(b"dom-sep", b"ShuffleProof");
         transcript.append_u64(b"k", k as u64);
 
+        let opened_proof = self.0.open().await?;
+        let input_commitments_starkpoint = join_all(input_commitments)
+            .await
+            .into_iter()
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(MultiproverError::Mpc)?;
+        let output_commitments_starkpoint = join_all(output_commitments)
+            .await
+            .into_iter()
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(MultiproverError::Mpc)?;
+
         let mut verifier = Verifier::new(pc_gens, transcript);
 
-        let opened_proof = await_result(self.0.open())?;
-        let input_commitments_opened = await_vec!(input_commitments)
-            .into_iter()
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(MultiproverError::Mpc)?;
-        let output_commitments_opened = await_vec!(output_commitments)
-            .into_iter()
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(MultiproverError::Mpc)?;
-        let input_vars: Vec<_> = input_commitments_opened
-            .iter()
-            .map(|V| verifier.commit(*V))
-            .collect_vec();
+        let input_vars = input_commitments_starkpoint
+            .iter().map(|V| verifier.commit(*V)).collect_vec();
+        let output_vars = output_commitments_starkpoint
+            .iter().map(|V| verifier.commit(*V)).collect_vec();
 
-        let output_vars: Vec<_> = output_commitments_opened
-            .iter()
-            .map(|V| verifier.commit(*V))
-            .collect_vec();
-
-
-        //TODO review
         Self::single_prover_gadget(&mut verifier, input_vars, output_vars)
             .map_err(MultiproverError::ProverError)?;
-
         verifier.verify(&opened_proof, bp_gens)
             .map_err(MultiproverError::ProverError)
 
@@ -415,7 +391,9 @@ impl MpcShuffleProof {
 }
 
 
-async fn mpc_kshuffle_helper(k: usize) {
+#[tokio::test]
+async fn mpc_shuffle_proof_test() {
+    let k: usize = 2;
     let (_, _) = execute_mock_mpc(|fabric| async  move {
     let pc_gens = PedersenGens::default();
     let bp_gens = BulletproofGens::new((2 * k).next_power_of_two(), 1);
@@ -434,32 +412,21 @@ async fn mpc_kshuffle_helper(k: usize) {
             MpcShuffleProof::prove(fabric.clone(), pc_gens, &bp_gens, prover_transcript, &input, &output).unwrap()
         };
 
-        {
-            let mut verifier_transcript = Transcript::new(b"ShuffleProofTest");
-            proof
-                .verify(
-                    &pc_gens,
-                    &bp_gens,
-                    &mut verifier_transcript,
-                    input_commitments,
-                    output_commitments
-                ).await.err()
-                .map(|err| {
-                    if let MultiproverError::ProverError(R1CSError::VerificationError) = err {
-                        Ok(())
-                    } else {
-                        Err(format!("Expected verification error, got {:?}", err))
-                    }
-                })
-                .unwrap_or(Err("Expected verification error, got Ok".to_string()));
-        }
+        let mut verifier_transcript = Transcript::new(b"ShuffleProofTest");
+        proof.verify(
+            &pc_gens,
+            &bp_gens,
+            &mut verifier_transcript,
+            input_commitments,
+            output_commitments
+        ).await.err()
+            .map(|err| {
+                if let MultiproverError::ProverError(R1CSError::VerificationError) = err {
+                    Ok(())
+                } else {
+                    Err(format!("Expected verification error, got {:?}", err))
+                }
+            })
+            .unwrap_or(Err("Expected verification error, got Ok".to_string()))
     }).await;
-
-
-}
-
-
-#[tokio::test]
-async fn mpc_shuffle_gadget_test() {
-    mpc_kshuffle_helper(2).await;
 }
