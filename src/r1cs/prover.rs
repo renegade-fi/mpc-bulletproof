@@ -7,7 +7,7 @@ use mpc_stark::algebra::stark_curve::StarkPoint;
 
 use super::{
     CircuitWeights, ConstraintSystem, LinearCombination, R1CSProof, RandomizableConstraintSystem,
-    RandomizedConstraintSystem, Variable,
+    RandomizedConstraintSystem, SparseWeightMatrix, SparseWeightVec, Variable,
 };
 
 use crate::errors::R1CSError;
@@ -75,7 +75,13 @@ impl<'t, 'g> ConstraintSystem for Prover<'t, 'g> {
 
     fn get_weights(&self) -> CircuitWeights {
         // Extract sparse-reduced weights from each constraint to construct the matrices
-        let (w_l, w_r, w_o, w_v, c) = self
+        let (w_l_transposed, w_r_transposed, w_o_transposed, w_v_transposed, c): (
+            SparseWeightMatrix,
+            SparseWeightMatrix,
+            SparseWeightMatrix,
+            SparseWeightMatrix,
+            SparseWeightVec,
+        ) = self
             // It's important that this iteration is in the correct order of the constraints,
             // otherwise we'll write the wrong index for the given constant in a constraint
             .constraints
@@ -87,11 +93,14 @@ impl<'t, 'g> ConstraintSystem for Prover<'t, 'g> {
             })
             .multiunzip();
 
+        let n = self.num_multipliers();
+        let m = self.v.len();
+
         CircuitWeights {
-            w_l,
-            w_r,
-            w_o,
-            w_v,
+            w_l: w_l_transposed.transposed(n),
+            w_r: w_r_transposed.transposed(n),
+            w_o: w_o_transposed.transposed(n),
+            w_v: w_v_transposed.transposed(m),
             c,
         }
     }

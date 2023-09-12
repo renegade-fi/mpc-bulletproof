@@ -5,15 +5,15 @@ use merlin::HashChainTranscript as Transcript;
 use mpc_stark::algebra::scalar::Scalar;
 use serde::{Deserialize, Serialize};
 
-#[derive(Serialize, Deserialize, Debug, Default, PartialEq, Eq)]
-pub struct SparseWeightRow(pub Vec<(usize, Scalar)>);
+#[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq, Eq)]
+pub struct SparseWeightVec(pub Vec<(usize, Scalar)>);
 
 // When extracting the weights from a [`LinearCombination`], it may or may not
 // have a constant term, which is represented by an `Option<Scalar>`.
 // When we try to unzip the weights collected from multiple [`LinearCombination`]s into a
 // [`CircuitWeights`] struct, we need to be able to extend a [`SparseWeightRow`] with a
 // `(usize, Option<Scalar>)` in order to build the `c` vector.
-impl Extend<(usize, Option<Scalar>)> for SparseWeightRow {
+impl Extend<(usize, Option<Scalar>)> for SparseWeightVec {
     fn extend<T: IntoIterator<Item = (usize, Option<Scalar>)>>(&mut self, iter: T) {
         self.0.extend(
             iter.into_iter()
@@ -22,22 +22,40 @@ impl Extend<(usize, Option<Scalar>)> for SparseWeightRow {
     }
 }
 
+/// A sparse-reduced matrix of circuit weights
 #[derive(Debug, Serialize, Deserialize, Default, PartialEq, Eq)]
-pub struct SparseReducedMatrix(pub Vec<SparseWeightRow>);
+pub struct SparseWeightMatrix(pub Vec<SparseWeightVec>);
 
-impl Extend<SparseWeightRow> for SparseReducedMatrix {
-    fn extend<T: IntoIterator<Item = SparseWeightRow>>(&mut self, iter: T) {
+impl SparseWeightMatrix {
+    /// Transposes a `SparseWeightMatrix`, accepting a `capacity` for the number of
+    /// vectors in the transposed form.
+    pub fn transposed(&self, capacity: usize) -> SparseWeightMatrix {
+        let mut matrix_inner = vec![SparseWeightVec::default(); capacity];
+
+        for (major_index, sparse_weight_vec) in self.0.iter().enumerate() {
+            for (minor_index, weight) in sparse_weight_vec.0.iter() {
+                assert!(capacity > *minor_index, "capacity too small");
+                matrix_inner[*minor_index].0.push((major_index, *weight));
+            }
+        }
+
+        SparseWeightMatrix(matrix_inner)
+    }
+}
+
+impl Extend<SparseWeightVec> for SparseWeightMatrix {
+    fn extend<T: IntoIterator<Item = SparseWeightVec>>(&mut self, iter: T) {
         self.0.extend(iter)
     }
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
 pub struct CircuitWeights {
-    pub w_l: SparseReducedMatrix,
-    pub w_r: SparseReducedMatrix,
-    pub w_o: SparseReducedMatrix,
-    pub w_v: SparseReducedMatrix,
-    pub c: SparseWeightRow,
+    pub w_l: SparseWeightMatrix,
+    pub w_r: SparseWeightMatrix,
+    pub w_o: SparseWeightMatrix,
+    pub w_v: SparseWeightMatrix,
+    pub c: SparseWeightVec,
 }
 
 /// The interface for a constraint system, abstracting over the prover

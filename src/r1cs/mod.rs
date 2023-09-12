@@ -10,7 +10,7 @@ mod verifier;
 
 pub use self::constraint_system::{
     CircuitWeights, ConstraintSystem, RandomizableConstraintSystem, RandomizedConstraintSystem,
-    SparseReducedMatrix, SparseWeightRow,
+    SparseWeightMatrix, SparseWeightVec,
 };
 pub use self::linear_combination::{LinearCombination, Variable};
 pub use self::proof::R1CSProof;

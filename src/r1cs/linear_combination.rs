@@ -8,7 +8,7 @@ use std::ops::{Add, Mul, Neg, Sub};
 
 use mpc_stark::algebra::scalar::Scalar;
 
-use super::constraint_system::SparseWeightRow;
+use super::constraint_system::SparseWeightVec;
 
 /// Represents a variable in a constraint system.
 #[derive(Copy, Clone, Debug, Hash, PartialEq, Eq)]
@@ -140,19 +140,19 @@ impl LinearCombination {
     pub fn extract_weights(
         &self,
     ) -> (
-        SparseWeightRow,
-        SparseWeightRow,
-        SparseWeightRow,
-        SparseWeightRow,
+        SparseWeightVec,
+        SparseWeightVec,
+        SparseWeightVec,
+        SparseWeightVec,
         Option<Scalar>,
     ) {
-        // Each LC can have up to `n` non-zero terms of each variable
+        // Each LC can have up to `n` non-zero terms of each variable type
         // and a single constant
 
-        let mut w_l_row = SparseWeightRow(Vec::new());
-        let mut w_r_row = SparseWeightRow(Vec::new());
-        let mut w_o_row = SparseWeightRow(Vec::new());
-        let mut w_v_row = SparseWeightRow(Vec::new());
+        let mut w_l_row = SparseWeightVec(Vec::new());
+        let mut w_r_row = SparseWeightVec(Vec::new());
+        let mut w_o_row = SparseWeightVec(Vec::new());
+        let mut w_v_row = SparseWeightVec(Vec::new());
         let mut c = None;
 
         // Iterating over the LC terms here has non-deterministic order.

@@ -514,27 +514,27 @@ lazy_static! {
     */
 
     static ref EXAMPLE_GADGET_WEIGHTS: CircuitWeights = CircuitWeights {
-        w_l: SparseReducedMatrix(vec![
-            SparseWeightRow(vec![(0, -Scalar::one())]),
-            SparseWeightRow(vec![]),
-            SparseWeightRow(vec![]),
+        w_l: SparseWeightMatrix(vec![
+            SparseWeightVec(vec![(0, -Scalar::one())]),
+            SparseWeightVec(vec![]),
+            SparseWeightVec(vec![]),
         ]),
-        w_r: SparseReducedMatrix(vec![
-            SparseWeightRow(vec![]),
-            SparseWeightRow(vec![(0, -Scalar::one())]),
-            SparseWeightRow(vec![]),
+        w_r: SparseWeightMatrix(vec![
+            SparseWeightVec(vec![]),
+            SparseWeightVec(vec![(0, -Scalar::one())]),
+            SparseWeightVec(vec![]),
         ]),
-        w_o: SparseReducedMatrix(vec![
-            SparseWeightRow(vec![]),
-            SparseWeightRow(vec![]),
-            SparseWeightRow(vec![(0, -Scalar::one())]),
+        w_o: SparseWeightMatrix(vec![
+            SparseWeightVec(vec![]),
+            SparseWeightVec(vec![]),
+            SparseWeightVec(vec![(0, -Scalar::one())]),
         ]),
-        w_v: SparseReducedMatrix(vec![
-            SparseWeightRow(vec![(0, -Scalar::one()), (1, -Scalar::one())]),
-            SparseWeightRow(vec![(2, -Scalar::one()), (3, -Scalar::one())]),
-            SparseWeightRow(vec![(4, -Scalar::one())]),
+        w_v: SparseWeightMatrix(vec![
+            SparseWeightVec(vec![(0, -Scalar::one()), (1, -Scalar::one())]),
+            SparseWeightVec(vec![(2, -Scalar::one()), (3, -Scalar::one())]),
+            SparseWeightVec(vec![(4, -Scalar::one())]),
         ]),
-        c: SparseWeightRow(vec![(2, -Scalar::from(*EXAMPLE_GADGET_C2))])
+        c: SparseWeightVec(vec![(2, -Scalar::from(*EXAMPLE_GADGET_C2))])
     };
 }
 
